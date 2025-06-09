@@ -1,0 +1,437 @@
+<script>
+    /*
+     * Schedule Manager - Frontend Event Listeners
+     *
+     * @version 1.3.0 (2025-06-08) - Added Browse All Teams event handlers (star/info clicks, roster modal)
+     * @version 1.2.0 (2025-06-07) - Updated dependencies to reflect 4-way core split.
+     * @version 1.1.0 (2025-06-07) - Updated to numbered filename for proper sorting order.
+     * @version 1.0.0 (2025-06-07) - Extracted from monolithic index.html for better organization.
+     *
+     * Purpose: DOM event binding and initialization - MUST LOAD LAST
+     * Dependencies: ALL other scripts (01-init, 02a-cache-navigation, 02b-grid-selection, 02c-team-ui, 02d-schedule-availability, 03-templates) and complete DOM from 02-body-structure.html
+     * Loading Order: CRITICAL - Must be last script as it binds to DOM elements and calls functions
+     * Provides: DOMContentLoaded handler, button clicks, modal events, collapsible panels, browse teams interactions
+     * Assumes: All functions from cache, grid, team, schedule, and template files; all DOM elements exist
+     */
+    document.addEventListener('DOMContentLoaded', () => { 
+        console.log("[ClientScript] DOMContentLoaded. Initializing page...");
+        if (typeof userContext !== 'undefined' && userContext !== null) { // Ensure userContext is defined before proceeding
+             handleInitialView();
+        } else {
+            console.error("[ClientScript] userContext is undefined at DOMContentLoaded. Page may not render correctly.");
+            // Optionally display a generic error message in 'initial-view-container'
+             document.getElementById('initial-view-container').innerHTML = '<p class="text-red-400">Error: User context not loaded. Please try refreshing.</p>';
+             document.getElementById('initial-view-container').classList.remove('hidden');
+        }
+        
+        // Initialize navigation buttons
+        updateNavigationButtons();
+        
+        const manualRefreshButton = document.getElementById('manual-refresh-btn');
+        if(manualRefreshButton) manualRefreshButton.addEventListener('click', handleManualRefresh);
+
+        // Week navigation button handlers
+        const prevWeekBtn = document.getElementById('prev-week-btn');
+        if(prevWeekBtn) prevWeekBtn.addEventListener('click', handlePrevWeek);
+        
+        const nextWeekBtn = document.getElementById('next-week-btn');
+        if(nextWeekBtn) nextWeekBtn.addEventListener('click', handleNextWeek);
+
+        // Grid Tools button handlers
+        const btnSelectAll = document.getElementById('btn-select-all');
+        if(btnSelectAll) btnSelectAll.addEventListener('click', selectAllCells);
+        
+        const btnClearSelection = document.getElementById('btn-clear-selection');
+        if(btnClearSelection) btnClearSelection.addEventListener('click', clearAllSelections);
+        
+        const btnAddMe = document.getElementById('btn-add-me');
+        if(btnAddMe) btnAddMe.addEventListener('click', function() { handleAvailabilityUpdate('add'); });
+        
+        const btnRemoveMe = document.getElementById('btn-remove-me');
+        if(btnRemoveMe) btnRemoveMe.addEventListener('click', function() { handleAvailabilityUpdate('remove'); });
+
+        // Template button handlers
+        const btnSaveTemplate = document.getElementById('btn-save-availability-template');
+        if(btnSaveTemplate) btnSaveTemplate.addEventListener('click', function(e) {
+            e.preventDefault();
+            showSaveTemplateModal();
+        });
+
+        const btnLoadTemplate = document.getElementById('btn-load-availability-template');
+        if(btnLoadTemplate) btnLoadTemplate.addEventListener('click', function(e) {
+            e.preventDefault();
+            showLoadTemplateModal();
+        });
+
+        // Modal event listeners
+        const saveTemplateConfirm = document.getElementById('save-template-confirm');
+        if(saveTemplateConfirm) saveTemplateConfirm.addEventListener('click', handleSaveTemplate);
+
+        const saveTemplateCancel = document.getElementById('save-template-cancel');
+        if(saveTemplateCancel) saveTemplateCancel.addEventListener('click', hideSaveTemplateModal);
+
+        const loadTemplateConfirm = document.getElementById('load-template-confirm');
+        if(loadTemplateConfirm) loadTemplateConfirm.addEventListener('click', handleLoadTemplate);
+
+        const loadTemplateCancel = document.getElementById('load-template-cancel');
+        if(loadTemplateCancel) loadTemplateCancel.addEventListener('click', hideLoadTemplateModal);
+
+        // Team Roster Modal handlers
+        const teamRosterClose = document.getElementById('team-roster-close');
+        if(teamRosterClose) teamRosterClose.addEventListener('click', hideTeamRosterModal);
+
+        // Browse All Teams delegated event handlers
+        document.addEventListener('click', function(event) {
+            // Handle favorite star clicks
+            const starBtn = event.target.closest('.favorite-star-btn');
+            if (starBtn) {
+                event.preventDefault();
+                event.stopPropagation();
+                handleFavoriteToggle(starBtn);
+                return;
+            }
+            
+            // Handle team info clicks
+            const infoBtn = event.target.closest('.team-info-btn');
+            if (infoBtn) {
+                event.preventDefault();
+                event.stopPropagation();
+                handleTeamInfoClick(infoBtn);
+                return;
+            }
+        });
+
+        const collapsibleTriggers = document.querySelectorAll('.collapsible-trigger');
+        collapsibleTriggers.forEach(trigger => {
+            const content = trigger.nextElementSibling; 
+            const chevron = trigger.querySelector('.collapsible-chevron');
+            if (!content || !content.classList.contains('collapsible-content')) return;
+            
+            if (content.classList.contains('default-open')) {
+                if (content.style.maxHeight === 'none' || (trigger.parentElement && trigger.parentElement.id === 'right-panel-browse-all-teams' && content.classList.contains('default-open'))) {
+                     content.style.maxHeight = 'none'; 
+                } else {
+                    const setDynamicHeight = () => {
+                        const innerContent = content.querySelector(':first-child');
+                        const originalDisplay = content.style.display; const originalMaxHeight = content.style.maxHeight;
+                        content.style.display = 'block'; content.style.maxHeight = 'none';
+                        let calculatedScrollHeight = innerContent ? innerContent.scrollHeight : content.scrollHeight;
+                        content.style.maxHeight = calculatedScrollHeight + 'px';
+                        if(originalDisplay && content.style.display !== originalDisplay) content.style.display = originalDisplay; // Attempt to restore if changed
+                    };
+                    setDynamicHeight(); 
+                    setTimeout(setDynamicHeight, 150); 
+                }
+                if(chevron) chevron.classList.add('rotate-180');
+            } else {
+                content.style.maxHeight = '0px'; 
+                if(chevron) chevron.classList.remove('rotate-180');
+            }
+
+            trigger.addEventListener('click', function(event) {
+                if (event.target.closest('button') && event.target !== trigger && !trigger.contains(event.target.closest('.collapsible-chevron'))) {
+                    let isActionButtonInTriggerHeader = false;
+                    let currentTarget = event.target.closest('button'); 
+                    if (currentTarget) {
+                        if (['btn-add-me', 'btn-remove-me', 'btn-select-all', 'btn-clear-selection', 'toggle-all-favorites'].includes(currentTarget.id)) {
+                            isActionButtonInTriggerHeader = true;
+                        } else {
+                            const parentOfButton = currentTarget.parentElement;
+                            if(parentOfButton && parentOfButton.classList.contains('flex') && parentOfButton.classList.contains('space-x-1')){
+                                isActionButtonInTriggerHeader = true;
+                            }
+                        }
+                    }
+                    if (isActionButtonInTriggerHeader) return; 
+                }
+                const isCurrentlyEffectivelyClosed = !content.style.maxHeight || content.style.maxHeight === '0px';
+                const innerContent = content.querySelector(':first-child');
+                if (content.style.maxHeight === 'none' && !isCurrentlyEffectivelyClosed) {
+                    content.style.maxHeight = '0px'; 
+                    if(chevron) chevron.classList.remove('rotate-180');
+                } else if (isCurrentlyEffectivelyClosed) {
+                     if (trigger.parentElement && trigger.parentElement.id === 'right-panel-browse-all-teams' && content.classList.contains('default-open')) {
+                         content.style.maxHeight = 'none'; 
+                    } else {
+                        content.style.maxHeight = (innerContent ? innerContent.scrollHeight : content.scrollHeight) + 'px';
+                    }
+                    if(chevron) chevron.classList.add('rotate-180');
+                } else {
+                    content.style.maxHeight = '0px';
+                    if(chevron) chevron.classList.remove('rotate-180');
+                }
+            });
+        });
+        
+        // Re-delegate team card clicks if they are dynamically added later (e.g. for right panel)
+        // For now, this only catches statically rendered ones or those made by populateTeamCardsAndActiveTeam
+        document.addEventListener('click', function(event) {
+            const card = event.target.closest('.team-card');
+            if (!card) return;
+
+            const starIcon = event.target.closest('.lucide-star');
+            if (starIcon && card.contains(starIcon)) { // Ensure star is within this card
+                const isCurrentlyFavorite = starIcon.getAttribute('fill') === 'currentColor';
+                if (isCurrentlyFavorite) {
+                    starIcon.setAttribute('fill', 'none');
+                    starIcon.classList.remove('text-amber-400');
+                    starIcon.classList.add('text-slate-500');
+                } else {
+                    starIcon.setAttribute('fill', 'currentColor');
+                    starIcon.classList.remove('text-slate-500');
+                    starIcon.classList.add('text-amber-400');
+                }
+                // Add favorite/unfavorite logic here later via google.script.run
+                return; 
+            }
+            
+            // If the click was on the card itself but not the star
+            if(event.target.closest('.left-panel-team-card')) {
+                // This logic is handled by the specific listeners in populateTeamCardsAndActiveTeam
+                return;
+            }
+
+            // For right panel team cards
+            card.classList.toggle('selected');
+            const teamNameSpan = card.querySelector('.team-name');
+            if (teamNameSpan) {
+                if (card.classList.contains('selected')) {
+                    teamNameSpan.classList.remove('text-slate-200');
+                    teamNameSpan.classList.add('text-sky-100');
+                } else {
+                    teamNameSpan.classList.remove('text-sky-100');
+                    teamNameSpan.classList.add('text-slate-200');
+                }
+            }
+        });
+        console.log("[ClientScript] DOMContentLoaded event listeners attached.");
+    });
+
+    /**
+     * Handle toggling favorite status for a team
+     */
+    function handleFavoriteToggle(starBtn) {
+        const teamId = starBtn.dataset.teamId;
+        const isCurrentlyFavorite = starBtn.dataset.isFavorite === 'true';
+        const starIcon = starBtn.querySelector('.lucide-star');
+        
+        if (!teamId || !starIcon) {
+            console.error('Missing teamId or star icon for favorite toggle');
+            return;
+        }
+        
+        // Optimistic UI update
+        const newFavoriteStatus = !isCurrentlyFavorite;
+        updateStarAppearance(starIcon, newFavoriteStatus);
+        starBtn.dataset.isFavorite = newFavoriteStatus.toString();
+        
+        // Backend call
+        google.script.run
+            .withSuccessHandler(function(response) {
+                if (response && response.success) {
+                    console.log('Favorite toggled successfully:', response.favorites);
+                    // Update userContext.favorites with the new list
+                    if (userContext) {
+                        userContext.favorites = response.favorites || [];
+                    }
+                } else {
+                    console.error('Failed to toggle favorite:', response);
+                    // Revert optimistic update on failure
+                    updateStarAppearance(starIcon, isCurrentlyFavorite);
+                    starBtn.dataset.isFavorite = isCurrentlyFavorite.toString();
+                    showStatusMessage('Failed to update favorite', 'error');
+                }
+            })
+            .withFailureHandler(function(error) {
+                console.error('Error toggling favorite:', error);
+                // Revert optimistic update on error
+                updateStarAppearance(starIcon, isCurrentlyFavorite);
+                starBtn.dataset.isFavorite = isCurrentlyFavorite.toString();
+                showStatusMessage('Error updating favorite', 'error');
+            })
+            .toggleFavoriteTeam(teamId, newFavoriteStatus);
+    }
+
+    /**
+     * Update star icon appearance
+     */
+    function updateStarAppearance(starIcon, isFavorite) {
+        if (isFavorite) {
+            starIcon.setAttribute('fill', 'currentColor');
+            starIcon.classList.remove('text-slate-500');
+            starIcon.classList.add('text-amber-400');
+        } else {
+            starIcon.setAttribute('fill', 'none');
+            starIcon.classList.remove('text-amber-400');
+            starIcon.classList.add('text-slate-500');
+        }
+    }
+
+    /**
+     * Handle team info button clicks
+     */
+    function handleTeamInfoClick(infoBtn) {
+        const teamId = infoBtn.dataset.teamId;
+        
+        if (!teamId) {
+            console.error('Missing teamId for info click');
+            return;
+        }
+        
+        showTeamRosterModal(teamId);
+    }
+
+    /**
+     * Show team roster modal
+     */
+    function showTeamRosterModal(teamId) {
+        const modal = document.getElementById('team-roster-modal');
+        const loading = document.getElementById('team-roster-loading');
+        const content = document.getElementById('team-roster-content');
+        const error = document.getElementById('team-roster-error');
+        
+        if (!modal) {
+            console.error('Team roster modal not found');
+            return;
+        }
+        
+        // Show modal in loading state
+        modal.classList.remove('hidden');
+        loading.classList.remove('hidden');
+        content.classList.add('hidden');
+        error.classList.add('hidden');
+        
+        // Fetch roster data
+        google.script.run
+            .withSuccessHandler(function(response) {
+                if (response && response.success && response.roster) {
+                    populateTeamRosterModal(response.roster, teamId);
+                    loading.classList.add('hidden');
+                    content.classList.remove('hidden');
+                } else {
+                    showTeamRosterError(response?.message || 'Failed to load team roster');
+                }
+            })
+            .withFailureHandler(function(error) {
+                console.error('Error loading team roster:', error);
+                showTeamRosterError(`Error: ${error.message || 'Failed to load team roster'}`);
+            })
+            .getRosterForTeam(teamId);
+    }
+
+    /**
+     * Populate team roster modal with data
+     */
+    function populateTeamRosterModal(roster, teamId) {
+        // Find team info from the cached teams list or from team cards
+        let teamInfo = null;
+        const teamCards = document.querySelectorAll('.team-card');
+        teamCards.forEach(card => {
+            if (card.dataset.teamId === teamId) {
+                const img = card.querySelector('img');
+                const nameEl = card.querySelector('.team-name');
+                const divisionEl = card.querySelector('.text-xs');
+                
+                teamInfo = {
+                    teamName: nameEl ? nameEl.textContent : 'Unknown Team',
+                    logoUrl: img ? img.src : appConfig.defaultLogoUrl,
+                    division: divisionEl ? divisionEl.textContent.split(' ')[1] : 'Unknown' // Extract division from "Div X"
+                };
+            }
+        });
+        
+        // Fallback if team info not found
+        if (!teamInfo) {
+            teamInfo = {
+                teamName: 'Team Details',
+                logoUrl: appConfig.defaultLogoUrl,
+                division: 'Unknown'
+            };
+        }
+        
+        // Update header
+        const logoEl = document.getElementById('team-roster-logo');
+        const nameEl = document.getElementById('team-roster-name');
+        const divisionEl = document.getElementById('team-roster-division');
+        
+        if (logoEl) logoEl.src = teamInfo.logoUrl;
+        if (nameEl) nameEl.textContent = teamInfo.teamName;
+        if (divisionEl) divisionEl.textContent = `Division ${teamInfo.division}`;
+        
+        // Find team leader
+        const leader = roster.find(player => player.role === 'team_leader');
+        const otherMembers = roster.filter(player => player.role !== 'team_leader');
+        
+        // Update leader section
+        const leaderNameEl = document.getElementById('team-roster-leader-name');
+        const leaderInitialsEl = document.getElementById('team-roster-leader-initials');
+        const leaderContactEl = document.getElementById('team-roster-leader-contact');
+        
+        if (leader) {
+            if (leaderNameEl) leaderNameEl.textContent = leader.displayName;
+            if (leaderInitialsEl) leaderInitialsEl.textContent = leader.initials;
+            if (leaderContactEl) {
+                leaderContactEl.innerHTML = '';
+                if (leader.googleEmail) {
+                    const emailDiv = document.createElement('div');
+                    emailDiv.innerHTML = `<span class="text-slate-400">Email:</span> ${leader.googleEmail}`;
+                    leaderContactEl.appendChild(emailDiv);
+                }
+                if (leader.discordUsername) {
+                    const discordDiv = document.createElement('div');
+                    discordDiv.innerHTML = `<span class="text-slate-400">Discord:</span> ${leader.discordUsername}`;
+                    leaderContactEl.appendChild(discordDiv);
+                }
+            }
+        }
+        
+        // Update members section
+        const membersEl = document.getElementById('team-roster-members');
+        if (membersEl) {
+            membersEl.innerHTML = '';
+            roster.forEach(player => {
+                const memberDiv = document.createElement('div');
+                memberDiv.className = 'flex items-center justify-between p-3 bg-slate-700/20 rounded border border-slate-600/30';
+                
+                const isLeader = player.role === 'team_leader';
+                memberDiv.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <div class="text-slate-200 font-medium">${player.displayName}</div>
+                        ${isLeader ? '<div class="text-xs bg-sky-600 text-white px-2 py-1 rounded">LEADER</div>' : ''}
+                    </div>
+                    <div class="text-sky-400 font-mono">${player.initials}</div>
+                `;
+                
+                membersEl.appendChild(memberDiv);
+            });
+        }
+    }
+
+    /**
+     * Show error in team roster modal
+     */
+    function showTeamRosterError(message) {
+        const loading = document.getElementById('team-roster-loading');
+        const content = document.getElementById('team-roster-content');
+        const error = document.getElementById('team-roster-error');
+        const errorMessage = document.getElementById('team-roster-error-message');
+        
+        loading.classList.add('hidden');
+        content.classList.add('hidden');
+        error.classList.remove('hidden');
+        
+        if (errorMessage) {
+            errorMessage.textContent = message;
+        }
+    }
+
+    /**
+     * Hide team roster modal
+     */
+    function hideTeamRosterModal() {
+        const modal = document.getElementById('team-roster-modal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+  </script>

@@ -1,0 +1,442 @@
+/**
+ * Schedule Manager - Week Block Manager (Phase 1D)
+ * @version 1.4.3 (2025-06-02) - Corrected all inter-file function calls to be direct global calls.
+ * @version 1.4.2 (2025-05-31) - Rewrote labelData creation to avoid 'label not defined' error.
+ * @version 1.4.1 (2025-05-31) - Corrected label placement in roster block for static Row 1 sheet headers.
+ * @version 1.4.0 (2025-05-31) - Removed block-internal headers; assumes static Row 1 sheet headers. Refined roster block structure.
+ */
+
+// BLOCK_CONFIG is global.
+// Functions from Configuration.js (e.g., getMondayFromWeekNumberAndYear, formatDate, handleError) are called directly.
+
+const WEEK_BLOCK_DATA_CACHE_EXPIRATION_SECONDS = 300; 
+
+// =============================================================================
+// WEEK BLOCK CREATION & MANAGEMENT
+// =============================================================================
+function createSingleWeekBlock(sheet, startRow, year, weekNumber) {
+  const CONTEXT = "WeekBlockManager.createSingleWeekBlock (v1.4.2 with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: '${sheet.getName()}', StartRow: ${startRow}, Year: ${year}, Week: ${weekNumber}`);
+  try {
+    const mondayDate = getMondayFromWeekNumberAndYear(year, weekNumber); // Global from Configuration.js
+    const monthName = formatDate(mondayDate, "MMMM"); // Global from Configuration.js
+    const timeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS; 
+    const numTimeSlots = timeSlots.length;
+    const maxPlayers = BLOCK_CONFIG.TEAM_SETTINGS.MAX_PLAYERS_PER_TEAM;
+
+    const blockDataRows = [];
+    for (let t = 0; t < numTimeSlots; t++) {
+      const rowData = [];
+      rowData[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR] = year;
+      rowData[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH] = monthName;
+      rowData[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK] = `W${weekNumber}`;
+      rowData[BLOCK_CONFIG.LAYOUT.TIME_COLUMN] = timeSlots[t];
+      for (let d = 0; d < 7; d++) { 
+        rowData[BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + d] = "";
+      }
+      blockDataRows.push(rowData);
+    }
+    sheet.getRange(startRow, 1, numTimeSlots, BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 7).setValues(blockDataRows);
+    
+    sheet.getRange(startRow, BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR + 1, numTimeSlots, 3)
+         .setBackground(BLOCK_CONFIG.COLORS.SHEET.METADATA_COLUMN_BG)
+         .setHorizontalAlignment("center").setVerticalAlignment("middle");
+    sheet.getRange(startRow, BLOCK_CONFIG.LAYOUT.TIME_COLUMN + 1, numTimeSlots, 1)
+         .setBackground(BLOCK_CONFIG.COLORS.SHEET.TIME_COLUMN_BG)
+         .setHorizontalAlignment("center").setVerticalAlignment("middle").setFontWeight("bold");
+
+    const availabilityGridRange = sheet.getRange(startRow, BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1, numTimeSlots, 7);
+    const backgrounds = [];
+    for (let r_bg = 0; r_bg < numTimeSlots; r_bg++) {
+      const rowBackgrounds = [];
+      for (let c_bg = 0; c_bg < 7; c_bg++) {
+        rowBackgrounds.push(c_bg >= 5 ? BLOCK_CONFIG.COLORS.SHEET.WEEKEND : BLOCK_CONFIG.COLORS.SHEET.WEEKDAY); 
+      }
+      backgrounds.push(rowBackgrounds);
+    }
+    availabilityGridRange.setBackgrounds(backgrounds).setVerticalAlignment("middle");
+
+    sheet.getRange(startRow, BLOCK_CONFIG.LAYOUT.TIME_COLUMN + 1, numTimeSlots, 1 + 7)
+         .setBorder(true, true, true, true, true, true, BLOCK_CONFIG.COLORS.LIGHT_GRAY, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+     sheet.getRange(startRow, BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR + 1, numTimeSlots, 3)
+         .setBorder(null, true, null, true, false, true, BLOCK_CONFIG.COLORS.LIGHT_GRAY, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+    const rosterLabelCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 7 + 1; 
+    const playerDataStartCol = rosterLabelCol + 1;
+    const numTotalPlayerCols = maxPlayers;
+
+    const attributeLabels = [
+        "Player Name:", "Initials:", "Role:", "Email (ID):", "Joined Team on:", 
+        "Weekly Changes:"
+    ];
+    const labelsToWriteCount = Math.min(attributeLabels.length, numTimeSlots); 
+    
+    const labelData = [];
+    const slicedAttributeLabels = attributeLabels.slice(0, labelsToWriteCount);
+    for (let i_label = 0; i_label < slicedAttributeLabels.length; i_label++) {
+        labelData.push([slicedAttributeLabels[i_label]]);
+    }
+
+    if (labelsToWriteCount > 0) {
+        sheet.getRange(startRow, rosterLabelCol, labelsToWriteCount, 1)
+             .setValues(labelData)
+             .setFontWeight("bold")
+             .setHorizontalAlignment("right")
+             .setVerticalAlignment("top")
+             .setBackground(BLOCK_CONFIG.COLORS.SHEET.METADATA_COLUMN_BG || "#f0f0f0");
+    }
+
+    if (numTotalPlayerCols > 0) {
+        sheet.getRange(startRow, playerDataStartCol, numTimeSlots, numTotalPlayerCols) 
+             .clearContent()
+             .setVerticalAlignment("top")
+             .setHorizontalAlignment("left")
+             .setWrap(true);
+    }
+    
+    const changelogLabelIndex = attributeLabels.indexOf("Weekly Changes:");
+    let changelogDataRow;
+    if (changelogLabelIndex !== -1 && changelogLabelIndex < numTimeSlots) {
+        changelogDataRow = startRow + changelogLabelIndex;
+    } else {
+        changelogDataRow = startRow + Math.max(0, numTimeSlots - 2); 
+        if (labelsToWriteCount < numTimeSlots) { 
+            sheet.getRange(changelogDataRow, rosterLabelCol, 1, 1)
+                 .setValue("Weekly Changes:")
+                 .setFontWeight("bold").setHorizontalAlignment("right")
+                 .setVerticalAlignment("top").setBackground(BLOCK_CONFIG.COLORS.SHEET.METADATA_COLUMN_BG || "#f0f0f0");
+        }
+    }
+
+    const changelogCellRange = sheet.getRange(changelogDataRow, playerDataStartCol, 1, numTotalPlayerCols > 0 ? numTotalPlayerCols : 1);
+    changelogCellRange.mergeAcross()
+         .clearContent()
+         .setValue("(No changes this week)")
+         .setWrap(true)
+         .setVerticalAlignment("top")
+         .setHorizontalAlignment("left");
+    
+    const numRosterSectionColsTotal = 1 + numTotalPlayerCols; 
+    sheet.getRange(startRow, rosterLabelCol, numTimeSlots, numRosterSectionColsTotal)
+         .setBorder(true, true, true, true, true, true, BLOCK_CONFIG.COLORS.LIGHT_GRAY, SpreadsheetApp.BorderStyle.SOLID_THIN);
+    
+    Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. Block created for ${year}-W${weekNumber}.`);
+    return {
+      success: true, 
+      year: year, weekNumber: weekNumber, month: monthName,
+      startRow: startRow, endRow: startRow + numTimeSlots - 1,
+      dayHeaders: null, timeSlots: timeSlots 
+    };
+    
+  } catch (e) {
+    Logger.log(`❌ Error in ${CONTEXT} on sheet ${sheet.getName()} for ${year}-W${weekNumber}: ${e.message}\n${e.stack}`);
+    return handleError(e, CONTEXT); // Global from Configuration.js
+  }
+}
+
+function ensureWeekExists(sheet, year, weekNumber) {
+  const CONTEXT = "WeekBlockManager.ensureWeekExists (with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, Year: ${year}, Week: ${weekNumber}`);
+  try {
+    if (!sheet) {
+        Logger.log(`[${CONTEXT}] ERROR: Sheet object is required.`);
+        throw new Error("Sheet object is required.");
+    }
+    Logger.log(`[${CONTEXT}] Calling findWeekBlock...`);
+    // This calls findWeekBlock from this same WeekBlockManager.js file (which is fine)
+    const existingBlock = findWeekBlock(sheet, year, weekNumber); 
+    
+    if (existingBlock) {
+      Logger.log(`[${CONTEXT}] Block found for ${year}-W${weekNumber}. Returning existing.`);
+      return { ...existingBlock, created: false, success: true };
+    }
+    
+    Logger.log(`[${CONTEXT}] Block NOT found for ${year}-W${weekNumber}. Calling getNextAvailableBlockPosition...`);
+    // This calls getNextAvailableBlockPosition from this same WeekBlockManager.js file (which is fine)
+    const insertDataRow = getNextAvailableBlockPosition(sheet); 
+    Logger.log(`[${CONTEXT}] Next available row: ${insertDataRow}. Calling createSingleWeekBlock...`);
+    // This calls createSingleWeekBlock from this same WeekBlockManager.js file (which is fine)
+    const newBlock = createSingleWeekBlock(sheet, insertDataRow, year, weekNumber); 
+    Logger.log(`[${CONTEXT}] createSingleWeekBlock result: ${JSON.stringify(newBlock)}`);
+    
+    if (newBlock && newBlock.success) {
+        Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. New block created for ${year}-W${weekNumber}.`);
+    } else {
+        Logger.log(`[${CONTEXT}] EXITED WITH FAILURE. Block creation failed for ${year}-W${weekNumber}.`);
+    }
+    return { ...newBlock, created: (newBlock && newBlock.success), success: (newBlock && newBlock.success) };
+  } catch (e) {
+    Logger.log(`❌ Error in ${CONTEXT} for sheet ${sheet.getName()}, ${year}-W${weekNumber}: ${e.message}`);
+    return { year: year, weekNumber: weekNumber, created: false, success: false, message: e.message };
+  }
+}
+
+function findWeekBlock(sheet, yearToFind, weekNumberToFind) {
+  const CONTEXT = "WeekBlockManager.findWeekBlock (with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, Year: ${yearToFind}, Week: ${weekNumberToFind}`);
+  try {
+    // This calls findAllWeekBlocks from this same WeekBlockManager.js file (which is fine)
+    const allBlocks = findAllWeekBlocks(sheet); 
+    const foundBlock = allBlocks.find(block => 
+      block.year === yearToFind && block.weekNumber === weekNumberToFind
+    );
+    if (foundBlock) {
+        Logger.log(`[${CONTEXT}] EXITED. Block found: ${JSON.stringify(foundBlock)}`);
+    } else {
+        Logger.log(`[${CONTEXT}] EXITED. Block NOT found.`);
+    }
+    return foundBlock || null;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} for sheet ${sheet.getName()}, ${yearToFind}-W${weekNumberToFind}: ${e.message}`);
+    return null;
+  }
+}
+
+function findAllWeekBlocks(sheet) {
+  const CONTEXT = "WeekBlockManager.findAllWeekBlocks (Static Headers, with logging)";
+  let iterationCount = 0; 
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}`);
+  try {
+    const blocks = [];
+    const lastRowWithContent = sheet.getLastRow();
+    const dataScanStartRow = 2; 
+    
+    if (lastRowWithContent < dataScanStartRow) {
+        Logger.log(`[${CONTEXT}] No content rows to scan (lastRowWithContent: ${lastRowWithContent}). Returning empty blocks.`);
+        return blocks;
+    }
+
+    const yearColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR + 1;
+    const monthColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH + 1;
+    const weekColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK + 1;
+    
+    const numSheetDataRows = lastRowWithContent - dataScanStartRow + 1;
+    if (numSheetDataRows <= 0) {
+        Logger.log(`[${CONTEXT}] Calculated numSheetDataRows is ${numSheetDataRows}. Returning empty blocks.`);
+        return blocks;
+    }
+
+    Logger.log(`[${CONTEXT}] Reading metadata from range: R${dataScanStartRow}C${yearColIdx} to R${dataScanStartRow + numSheetDataRows -1}C${weekColIdx}`);
+    const metaRange = sheet.getRange(dataScanStartRow, yearColIdx, numSheetDataRows, weekColIdx - yearColIdx + 1);
+    const metaValues = metaRange.getValues();
+    const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
+    Logger.log(`[${CONTEXT}] numTimeSlots: ${numTimeSlots}, numSheetDataRows from sheet: ${numSheetDataRows}, metaValues length: ${metaValues.length}`);
+
+    for (let r = 0; r < metaValues.length; r++) { 
+      iterationCount++;
+      if (iterationCount > 500 && (iterationCount % 100 === 0)) { 
+          Logger.log(`[${CONTEXT}] WARNING: Iteration ${iterationCount} in loop. Checking row index r=${r} of metaValues.`);
+          if (iterationCount > 2000) { 
+            Logger.log(`[${CONTEXT}] CRITICAL WARNING: Exceeded 2000 iterations. Aborting findAllWeekBlocks for safety.`);
+            break;
+          }
+      }
+      
+      const currentYear = metaValues[r][0]; 
+      const currentWeekText = metaValues[r][2]; 
+
+      if (typeof currentYear === 'number' && currentYear >= 2000 && 
+          typeof currentWeekText === 'string' && currentWeekText.toUpperCase().startsWith('W')) {
+        
+        const actualSheetRowForDataStart = dataScanStartRow + r; 
+        const isAlreadyFound = blocks.some(b => 
+            actualSheetRowForDataStart >= b.startRow && actualSheetRowForDataStart <= b.endRow);
+        
+        if (isAlreadyFound) {
+          continue;
+        }
+
+        const weekNumber = parseInt(currentWeekText.substring(1));
+        if (!isNaN(weekNumber) && weekNumber > 0 && weekNumber <= 53) {
+          let isFullBlockPattern = true;
+          if (r + numTimeSlots > metaValues.length) { 
+              isFullBlockPattern = false; 
+          } else {
+              for(let i_block = 1; i_block < numTimeSlots; i_block++) { 
+                  if(metaValues[r+i_block][0] !== currentYear || 
+                     String(metaValues[r+i_block][2]).toUpperCase() !== currentWeekText.toUpperCase()) {
+                      isFullBlockPattern = false;
+                      break;
+                  }
+              }
+          }
+          
+          if (isFullBlockPattern) {
+            blocks.push({
+              year: currentYear,
+              weekNumber: weekNumber,
+              month: metaValues[r][1], 
+              startRow: actualSheetRowForDataStart, 
+              endRow: actualSheetRowForDataStart + numTimeSlots - 1 
+            });
+            r += numTimeSlots - 1; 
+          }
+        }
+      }
+    } 
+
+    blocks.sort((a, b) => (a.year - b.year) || (a.weekNumber - b.weekNumber));
+    Logger.log(`[${CONTEXT}] EXITED. Found ${blocks.length} blocks after ${iterationCount} metaValues row checks (total rows scanned from sheet: ${numSheetDataRows}).`);
+    return blocks;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} on sheet ${sheet.getName()}: ${e.message}\nStack: ${e.stack}`);
+    return [];
+  }
+}
+
+function getNextAvailableBlockPosition(sheet) {
+  const CONTEXT = "WeekBlockManager.getNextAvailableBlockPosition (Static Headers, with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}`);
+  try {
+    // This calls findAllWeekBlocks from this same file
+    const allBlocks = findAllWeekBlocks(sheet); 
+    if (allBlocks.length === 0) {
+      Logger.log(`[${CONTEXT}] No existing blocks found. Next position is 2.`);
+      return 2; 
+    }
+    const lastBlock = allBlocks[allBlocks.length - 1];
+    const nextPosition = lastBlock.endRow + 1; 
+    Logger.log(`[${CONTEXT}] Last block ends at ${lastBlock.endRow}. Next position is ${nextPosition}.`);
+    return nextPosition;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} on sheet ${sheet.getName()}: ${e.message}. Defaulting to row 2.`);
+    return 2; 
+  }
+}
+
+function readWeekBlockData(sheet, weekBlock) {
+  const CONTEXT = "WeekBlockManager.readWeekBlockData (v1.1 - Cache Check)"; // Updated context for clarity
+  const cache = CacheService.getScriptCache();
+  const sheetName = sheet.getName();
+  const cacheKey = `scheduleData_${sheetName}_${weekBlock.year}_W${weekBlock.weekNumber}`;
+
+  try {
+    const cachedScheduleRaw = cache.get(cacheKey);
+    if (cachedScheduleRaw !== null) {
+      const parsedCachedSchedule = JSON.parse(cachedScheduleRaw);
+      // Check if the cached item is an error object or invalid
+      if (parsedCachedSchedule && typeof parsedCachedSchedule.error !== 'undefined') {
+        Logger.log(`[${CONTEXT}] Cache HIT for ${cacheKey} but it contained a previously cached error object. Invalidating and re-fetching.`);
+        cache.remove(cacheKey); // Invalidate this bad cache entry
+        // Proceed to fetch fresh data by not returning here
+      } else if (parsedCachedSchedule && parsedCachedSchedule.year === weekBlock.year && parsedCachedSchedule.weekNumber === weekBlock.weekNumber) {
+        // Valid cache hit
+        Logger.log(`[${CONTEXT}] Cache HIT for ${cacheKey}. Returning valid cached data.`);
+        return parsedCachedSchedule;
+      } else if (parsedCachedSchedule) {
+        // Cached object exists but doesn't seem to be the correct one (e.g. year/week mismatch or missing key fields)
+        Logger.log(`[${CONTEXT}] Cache HIT for ${cacheKey} but data seemed malformed or for wrong block. Invalidating and re-fetching. Cached data: ${JSON.stringify(parsedCachedSchedule)}`);
+        cache.remove(cacheKey);
+      } else {
+        // parsedCachedSchedule is null (e.g. cache contained literal "null" string)
+        Logger.log(`[${CONTEXT}] Cache HIT for ${cacheKey} but parsed to null. Invalidating and re-fetching.`);
+        cache.remove(cacheKey);
+      }
+    }
+
+    Logger.log(`[${CONTEXT}] Cache MISS or invalid/stale cache for ${cacheKey}. Fetching fresh from sheet: ${sheetName}, Year: ${weekBlock.year}, Week: ${weekBlock.weekNumber}`);
+    
+    const timeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS; //
+    const numTimeSlots = timeSlots.length;
+    // DAYS_START_COLUMN is 0-indexed, getRange is 1-indexed
+    const dataStartColForAvail = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1; //
+    
+    // Day headers are read from Row 1 of the sheet, which is static
+    const dayHeadersFromSheet = sheet.getRange(1, dataStartColForAvail, 1, 7).getValues()[0].map(h => String(h).trim());
+    
+    // Ensure weekBlock.startRow is valid and numTimeSlots is positive
+    if (weekBlock.startRow < 1 || numTimeSlots <= 0) {
+        const errorMessage = `Invalid parameters for reading availability data: startRow ${weekBlock.startRow}, numTimeSlots ${numTimeSlots}.`;
+        Logger.log(`[${CONTEXT}] ERROR: ${errorMessage}`);
+        throw new Error(errorMessage); // This will be caught by the outer catch
+    }
+
+    const availabilityDataRange = sheet.getRange(weekBlock.startRow, dataStartColForAvail, numTimeSlots, 7);
+    const availabilityValues = availabilityDataRange.getDisplayValues(); 
+    
+    const schedule = {
+      year: weekBlock.year, 
+      weekNumber: weekBlock.weekNumber, 
+      month: weekBlock.month, // month is already part of weekBlock object
+      timeSlots: timeSlots, 
+      dayHeaders: dayHeadersFromSheet, 
+      availability: []
+    };
+
+    for (let tIndex = 0; tIndex < numTimeSlots; tIndex++) {
+      const timeSlotLabel = timeSlots[tIndex]; 
+      const slotData = { time: timeSlotLabel, days: [] };
+      for (let dIndex = 0; dIndex < 7; dIndex++) {
+        // Ensure availabilityValues[tIndex] exists before trying to access [dIndex]
+        const cellValueString = (availabilityValues[tIndex] && typeof availabilityValues[tIndex][dIndex] !== 'undefined') 
+                                ? String(availabilityValues[tIndex][dIndex] || "").trim() 
+                                : "";
+        const initials = cellValueString ? cellValueString.split(/[,\s]+/).filter(e => e.trim()) : [];
+        slotData.days.push({
+          day: dayHeadersFromSheet[dIndex], 
+          initials: initials, 
+          playerCount: initials.length,
+          cellRef: { row: weekBlock.startRow + tIndex, col: dataStartColForAvail + dIndex }
+        });
+      }
+      schedule.availability.push(slotData);
+    }
+    
+    // Only cache successfully built schedule data
+    cache.put(cacheKey, JSON.stringify(schedule), WEEK_BLOCK_DATA_CACHE_EXPIRATION_SECONDS);
+    Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. Data read and cached for ${cacheKey}.`);
+    return schedule;
+
+  } catch (e) {
+    Logger.log(`❌ Error in ${CONTEXT} for block ${weekBlock.year}-W${weekBlock.weekNumber} on sheet '${sheetName}': ${e.message}\nStack: ${e.stack || 'No stack'}`);
+    // Return a structured error object, but DO NOT CACHE IT.
+    return { 
+      year: weekBlock.year, 
+      weekNumber: weekBlock.weekNumber, 
+      month: weekBlock.month || "ErrorMonth", // Use month from weekBlock if available
+      timeSlots: BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS, //
+      dayHeaders: BLOCK_CONFIG.LAYOUT.DAY_ABBREV,   //  
+      availability: [], 
+      error: `Failed to read week block data: ${e.message}`
+    };
+  }
+}
+
+function validateBlockStructure(sheet, startDataRow) { 
+  const CONTEXT = "WeekBlockManager.validateBlockStructure (Static Headers, with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, StartDataRow: ${startDataRow}`);
+  try {
+    // ... (rest of function, assuming it calls Configuration.js functions directly if needed)
+    // ... For brevity, I'll assume internal logic is fine or uses Apps Script globals.
+    // ... This function was less likely to cause recursion itself.
+    const validation = { isValid: true, errors: [], warnings: [] };
+    const metadataValues = sheet.getRange(startDataRow, 1, 1, 3).getValues()[0];
+    const year = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR];
+    const month = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH];
+    const weekText = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK];
+
+    if (typeof year !== 'number' || year < 2000) {
+      validation.isValid = false; validation.errors.push(`Invalid Year at data row ${startDataRow}, Col A.`);
+    }
+    if (typeof month !== 'string' || month.length < 3) {
+      validation.isValid = false; validation.errors.push(`Invalid Month at data row ${startDataRow}, Col B.`);
+    }
+    if (typeof weekText !== 'string' || !weekText.toUpperCase().startsWith('W') || isNaN(parseInt(weekText.substring(1)))) {
+      validation.isValid = false; validation.errors.push(`Invalid Week format at data row ${startDataRow}, Col C (expected "W##").`);
+    }
+    const timeCol = BLOCK_CONFIG.LAYOUT.TIME_COLUMN + 1;
+    const expectedTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS;
+    const actualTimeSlots = sheet.getRange(startDataRow, timeCol, expectedTimeSlots.length, 1).getValues();
+    for (let i = 0; i < expectedTimeSlots.length; i++) {
+      if (String(actualTimeSlots[i][0]).trim() !== expectedTimeSlots[i]) {
+        validation.warnings.push(`Time slot mismatch at data row ${startDataRow + i}, Col D: expected '${expectedTimeSlots[i]}', found '${actualTimeSlots[i][0]}'.`);
+        validation.isValid = false; 
+      }
+    }
+    Logger.log(`[${CONTEXT}] EXITED. Validation result: ${JSON.stringify(validation)}`);
+    return validation;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} for sheet ${sheet.getName()}, data row ${startDataRow}: ${e.message}`);
+    return { isValid: false, errors: [`Validation exception: ${e.message}`], warnings: [] };
+  }
+}
