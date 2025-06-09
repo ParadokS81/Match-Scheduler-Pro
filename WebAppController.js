@@ -380,3 +380,17 @@ function debugAvailableFunctions() {
     Logger.log("Function availability:", JSON.stringify(functions));
     return { success: true, functions: functions };
 }
+
+// --- Generic Drive Image Function (NEW) ---
+function getDriveImageAsBase64(driveUrl) {
+  return imageService_getDriveImageAsBase64(driveUrl);
+}
+
+// --- Logo Base64 Functions ---
+function getTeamLogoAsBase64(teamId) {
+  return imageService_getTeamLogoAsBase64(teamId);
+}
+
+function getMultipleTeamLogosAsBase64(teamIds) {
+  return imageService_getMultipleTeamLogosAsBase64(teamIds);
+}

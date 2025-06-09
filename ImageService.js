@@ -1,19 +1,82 @@
 /**
- * Schedule Manager - Logo Service (Web App Edition)
- * * @version 1.0.1 (2025-05-30) - Phase 1D Refactor (Manager calls updated)
- * * Description: Handles team logo operations for web application.
+ * Schedule Manager - Image Service (Web App Edition)
+ * @version 1.2.0 (2025-06-09) - Renamed from LogoService to ImageService, added generic Drive image support
+ * @version 1.1.0 (2025-06-09) - Added base64 conversion for Drive images
+ * @version 1.0.1 (2025-05-30) - Phase 1D Refactor (Manager calls updated)
+ * 
+ * Description: Handles all image operations including team logos and generic Drive images.
+ * Provides base64 conversion for Google Drive hosted images to bypass CORS issues.
  *
  * CHANGELOG:
+ * 1.2.0 - 2025-06-09 - Consolidated all image handling, added getDriveImageAsBase64 for generic use
+ * 1.1.0 - 2025-06-09 - Added getTeamLogoAsBase64 and getMultipleTeamLogosAsBase64 for frontend display
  * 1.0.1 - 2025-05-30 - Ensured explicit calls to TeamDataManager.
  * 1.0.0 - 2025-05-30 - Phase 1C: Initial implementation for web app architecture.
  */
 
 // =============================================================================
-// LOGO FILE OPERATIONS
+// GENERIC DRIVE IMAGE OPERATIONS
+// =============================================================================
+
+/**
+ * Convert any Google Drive hosted image to base64 for display in web app
+ * @param {string} driveUrl - Google Drive URL or any image URL
+ * @returns {Object} Response with base64 data or direct URL
+ */
+function imageService_getDriveImageAsBase64(driveUrl) {
+  const CONTEXT = "ImageService.getDriveImageAsBase64";
+  try {
+    if (!driveUrl || typeof driveUrl !== 'string') {
+      return createSuccessResponse({
+        imageBase64: null,
+        mimeType: null
+      }, "No URL provided");
+    }
+    
+    // Extract file ID from Drive URL
+    const fileIdMatch = driveUrl.match(/id=([a-zA-Z0-9_-]+)/);
+    if (!fileIdMatch || !fileIdMatch[1]) {
+      // Not a Drive URL, return as direct URL
+      return createSuccessResponse({
+        imageBase64: null,
+        mimeType: null,
+        directUrl: driveUrl
+      }, "Non-Drive URL provided");
+    }
+    
+    try {
+      const file = DriveApp.getFileById(fileIdMatch[1]);
+      const blob = file.getBlob();
+      
+      // Validate it's an image
+      const contentType = blob.getContentType();
+      if (!contentType.startsWith('image/')) {
+        return createErrorResponse(`File is not an image: ${contentType}`);
+      }
+      
+      const base64 = Utilities.base64Encode(blob.getBytes());
+      
+      return createSuccessResponse({
+        imageBase64: base64,
+        mimeType: contentType
+      }, "Image retrieved successfully");
+      
+    } catch (e) {
+      Logger.log(`${CONTEXT}: Error accessing Drive file: ${e.message}`);
+      return createErrorResponse(`Could not access image file: ${e.message}`);
+    }
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// =============================================================================
+// TEAM LOGO FILE OPERATIONS
 // =============================================================================
 
 function uploadLogoFile(base64Data, fileName, mimeType, teamId) {
-  const CONTEXT = "LogoService.uploadLogoFile";
+  const CONTEXT = "ImageService.uploadLogoFile";
   try {
     // Logger.log(`${CONTEXT}: Processing file upload for team ${teamId}: ${fileName} (${mimeType})`);
     
@@ -23,8 +86,8 @@ function uploadLogoFile(base64Data, fileName, mimeType, teamId) {
       return createErrorResponse(`File validation failed: ${validation.errors.join(', ')}`, { errors: validation.errors });
     }
     
-    const teamData = TeamDataManager.getTeamData(teamId); // UPDATED to be explicit
-    if (!teamData) { // TeamDataManager.getTeamData returns null if not found
+    const teamData = getTeamData(teamId); // Direct call to global function
+    if (!teamData) { // getTeamData returns null if not found
       return createErrorResponse(`Team not found: ${teamId}`);
     }
     
@@ -47,7 +110,7 @@ function uploadLogoFile(base64Data, fileName, mimeType, teamId) {
 }
 
 function fetchAndSaveTeamLogo(imageUrl, teamId) {
-  const CONTEXT = "LogoService.fetchAndSaveTeamLogo";
+  const CONTEXT = "ImageService.fetchAndSaveTeamLogo";
   try {
     // Logger.log(`${CONTEXT}: Fetching logo from ${imageUrl} for team ${teamId}`);
     
@@ -56,7 +119,7 @@ function fetchAndSaveTeamLogo(imageUrl, teamId) {
       return createErrorResponse(`URL validation failed: ${urlValidation.errors.join(', ')}`, { errors: urlValidation.errors });
     }
     
-    const teamData = TeamDataManager.getTeamData(teamId); // UPDATED
+    const teamData = getTeamData(teamId); // Direct call
     if (!teamData) {
       return createErrorResponse(`Team not found: ${teamId}`);
     }
@@ -98,7 +161,7 @@ function fetchAndSaveTeamLogo(imageUrl, teamId) {
 }
 
 function saveTeamLogoToDrive(imageBlob, teamName) {
-  const CONTEXT = "LogoService.saveTeamLogoToDrive";
+  const CONTEXT = "ImageService.saveTeamLogoToDrive";
   try {
     const cleanTeamName = teamName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
     let fileExtension = getExtensionFromContentType(imageBlob.getContentType()); // local helper
@@ -136,7 +199,7 @@ function saveTeamLogoToDrive(imageBlob, teamName) {
 }
 
 function updateTeamLogoUrl(teamId, logoUrl = "") {
-  const CONTEXT = "LogoService.updateTeamLogoUrl";
+  const CONTEXT = "ImageService.updateTeamLogoUrl";
   try {
     // Logger.log(`${CONTEXT}: Updating logo URL for team ${teamId}: ${logoUrl}`);
     const validation = validateLogoUrl(logoUrl); // from Configuration.js
@@ -144,8 +207,8 @@ function updateTeamLogoUrl(teamId, logoUrl = "") {
       return createErrorResponse(`Invalid logo URL: ${validation.errors.join(', ')}`);
     }
     
-    // Call TeamDataManager.updateTeam - requestingUserEmail assumed to be system or already validated by API layer
-    const updateResult = TeamDataManager.updateTeam(teamId, { logoUrl: logoUrl.trim() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); // UPDATED
+    // Call updateTeam - requestingUserEmail assumed to be system or already validated by API layer
+    const updateResult = updateTeam(teamId, { logoUrl: logoUrl.trim() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); // Direct call
     
     if (updateResult.success) {
       // Logger.log(`${CONTEXT}: ✅ Logo URL updated for team ${teamId}`);
@@ -159,16 +222,16 @@ function updateTeamLogoUrl(teamId, logoUrl = "") {
 }
 
 function deleteTeamLogo(teamId) {
-  const CONTEXT = "LogoService.deleteTeamLogo";
+  const CONTEXT = "ImageService.deleteTeamLogo";
   try {
     // Logger.log(`${CONTEXT}: Deleting logo for team ${teamId}`);
-    const teamData = TeamDataManager.getTeamData(teamId); // UPDATED
+    const teamData = getTeamData(teamId); // Direct call
     if (!teamData) {
       return createErrorResponse(`Team not found: ${teamId}`);
     }
     const currentLogoUrl = teamData.logoUrl;
     
-    const clearDbResult = updateTeamLogoUrl(teamId, ""); // This calls TeamDataManager.updateTeam
+    const clearDbResult = updateTeamLogoUrl(teamId, ""); // This calls updateTeam
     if (!clearDbResult.success) {
       Logger.log(`${CONTEXT}: Warning - Could not clear logo URL from database for ${teamId}: ${clearDbResult.message}`);
       // Continue to attempt Drive file deletion if URL was present
@@ -196,10 +259,78 @@ function deleteTeamLogo(teamId) {
 }
 
 // =============================================================================
-// UTILITY FUNCTIONS (Local to LogoService)
+// BASE64 CONVERSION FUNCTIONS FOR TEAM LOGOS
+// =============================================================================
+
+function imageService_getTeamLogoAsBase64(teamId) {
+  const CONTEXT = "ImageService.getTeamLogoAsBase64";
+  try {
+    // Get team data to find logo URL
+    const teamData = getTeamData(teamId); // Direct call to global function
+    if (!teamData || !teamData.logoUrl) {
+      return createSuccessResponse({
+        teamId: teamId,
+        logoBase64: null,
+        mimeType: null
+      }, "No logo found for team");
+    }
+    
+    // Use the generic function to handle the conversion
+    const imageResult = imageService_getDriveImageAsBase64(teamData.logoUrl);
+    
+    // Map the response to match the expected structure for team logos
+    if (imageResult.success) {
+      return createSuccessResponse({
+        teamId: teamId,
+        logoBase64: imageResult.imageBase64,
+        mimeType: imageResult.mimeType,
+        directUrl: imageResult.directUrl
+      }, imageResult.message);
+    } else {
+      return imageResult; // Pass through error response
+    }
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// Batch operation for performance
+function imageService_getMultipleTeamLogosAsBase64(teamIds) {
+  const CONTEXT = "ImageService.getMultipleTeamLogosAsBase64";
+  try {
+    const results = {};
+    
+    // Process each team ID
+    teamIds.forEach(teamId => {
+      const logoResult = imageService_getTeamLogoAsBase64(teamId);
+      if (logoResult.success) {
+        if (logoResult.logoBase64) {
+          results[teamId] = {
+            base64: logoResult.logoBase64,
+            mimeType: logoResult.mimeType
+          };
+        } else if (logoResult.directUrl) {
+          results[teamId] = {
+            directUrl: logoResult.directUrl
+          };
+        }
+      }
+    });
+    
+    return createSuccessResponse({
+      logos: results
+    }, `Retrieved ${Object.keys(results).length} logos`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// =============================================================================
+// UTILITY FUNCTIONS (Local to ImageService)
 // =============================================================================
 function deleteExistingTeamLogo(folder, cleanTeamName) {
-  // ... (implementation as provided by user, seems fine)
   try {
     const files = folder.getFiles();
     let deletedCount = 0;
@@ -212,13 +343,12 @@ function deleteExistingTeamLogo(folder, cleanTeamName) {
     }
     return { success: true, deletedCount: deletedCount };
   } catch (e) {
-    Logger.log(`LogoService.deleteExistingTeamLogo: Warning - ${e.message}`);
+    Logger.log(`ImageService.deleteExistingTeamLogo: Warning - ${e.message}`);
     return { success: false, message: e.message };
   }
 }
 
 function getExtensionFromContentType(contentType) {
-  // ... (implementation as provided by user, seems fine)
   const typeMap = {'image/png':'png', 'image/jpeg':'jpg', 'image/jpg':'jpg', 'image/gif':'gif', 'image/webp':'webp'};
   return typeMap[String(contentType).toLowerCase()] || null;
 }
@@ -226,10 +356,10 @@ function getExtensionFromContentType(contentType) {
 // =============================================================================
 // PUBLIC GETTERS (Used by WebAppAPI typically)
 // =============================================================================
-function getTeamLogoUrl(teamId) { // Renamed to match usage in WebAppAPI
-  const CONTEXT = "LogoService.getTeamLogoUrl";
+function getTeamLogoUrl(teamId) {
+  const CONTEXT = "ImageService.getTeamLogoUrl";
   try {
-    const teamData = TeamDataManager.getTeamData(teamId); // UPDATED
+    const teamData = getTeamData(teamId); // Direct call
     if (!teamData) {
       return createErrorResponse(`Team not found: ${teamId}`);
     }
@@ -242,8 +372,18 @@ function getTeamLogoUrl(teamId) { // Renamed to match usage in WebAppAPI
   }
 }
 
-// generateLogoHtml was in user's original file. It's more of a frontend/display helper.
-// If it's needed by backend, it can stay, otherwise it might be removed from server-side.
-// For now, let's assume it might be used for some server-side report generation or admin UI.
-
-// debugLogoOperations - can be kept for testing.
+function convertDiscordImageToBase64() {
+  const imageUrl = "https://drive.google.com/uc?id=1a0ydLZEVfQpZyMxccvOI8Hw03gQfHseN";
+  const result = imageService_getDriveImageAsBase64(imageUrl);
+  
+  if (result.success && result.imageBase64) {
+    const dataUrl = `data:${result.mimeType};base64,${result.imageBase64}`;
+    
+    // This will be too long for Logger.log, so let's save it to a document
+    const doc = DocumentApp.create('Discord Image Base64');
+    doc.getBody().appendParagraph(dataUrl);
+    
+    Logger.log('Base64 data URL saved to document: ' + doc.getUrl());
+    Logger.log('Length: ' + dataUrl.length + ' characters');
+  }
+}

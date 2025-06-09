@@ -2,14 +2,158 @@
     /*
      * Schedule Manager - Team & UI Management
      *
+     * @version 1.2.0 (2025-06-09) - Added logo management system with base64 support
      * @version 1.1.0 (2025-06-08) - Added renderBrowseAllTeams function for right panel
      * @version 1.0.0 (2025-06-07) - Extracted from 02-core.html for better organization.
      *
-     * Purpose: Team switching, UI management, and form handling
+     * Purpose: Team switching, UI management, form handling, and logo management
      * Dependencies: Global variables from 01-init.html (userContext, appConfig, currentActiveTeamId)
-     * Provides: Team management, view switching, form submission handlers
-     * Functions: setActiveTeam, populateTeamCardsAndActiveTeam, showMainApp, handleJoinTeamSubmit, renderBrowseAllTeams
+     * Provides: Team management, view switching, form submission handlers, logo loading
+     * Functions: setActiveTeam, populateTeamCardsAndActiveTeam, showMainApp, handleJoinTeamSubmit, renderBrowseAllTeams, logo management
      */
+
+    // =============================================================================
+    // LOGO MANAGEMENT SYSTEM
+    // =============================================================================
+    
+    // Logo cache management
+    const logoCache = new Map();
+    const logoLoadingPromises = new Map(); // Prevent duplicate requests
+
+    /**
+     * Load any Google Drive hosted image and convert to base64 if needed
+     * @param {string} imageUrl - The image URL (Drive or direct)
+     * @param {HTMLImageElement} imgElement - The img element to update
+     */
+    function loadDriveImage(imageUrl, imgElement) {
+      if (!imageUrl || !imgElement) return;
+      
+      // Check if it's a Drive URL
+      if (imageUrl.includes('drive.google.com')) {
+        google.script.run
+          .withSuccessHandler(function(response) {
+            if (response.success) {
+              if (response.imageBase64) {
+                imgElement.src = `data:${response.mimeType};base64,${response.imageBase64}`;
+              } else if (response.directUrl) {
+                imgElement.src = response.directUrl;
+              }
+            }
+          })
+          .withFailureHandler(function(error) {
+            console.error('Failed to load Drive image', error);
+            // Optionally set a fallback image
+            // imgElement.src = '/path/to/fallback.png';
+          })
+          .getDriveImageAsBase64(imageUrl);
+      } else {
+        // Not a Drive URL, use directly
+        imgElement.src = imageUrl;
+      }
+    }
+
+    function loadTeamLogo(teamId, imgElement, fallbackUrl = null) {
+      // Use fallback if no teamId
+      if (!teamId) {
+        imgElement.src = fallbackUrl || appConfig.defaultLogoUrl || 'https://www.quakeworld.nu/w/resources/assets/qwiki-logo.png';
+        return;
+      }
+      
+      // Check cache first
+      if (logoCache.has(teamId)) {
+        imgElement.src = logoCache.get(teamId);
+        return;
+      }
+      
+      // Check if already loading
+      if (logoLoadingPromises.has(teamId)) {
+        logoLoadingPromises.get(teamId).then(dataUrl => {
+          if (dataUrl) imgElement.src = dataUrl;
+        });
+        return;
+      }
+      
+      // Set temporary fallback while loading
+      imgElement.src = fallbackUrl || appConfig.defaultLogoUrl || 'https://www.quakeworld.nu/w/resources/assets/qwiki-logo.png';
+      
+      // Create loading promise
+      const loadPromise = new Promise((resolve) => {
+        google.script.run
+          .withSuccessHandler(function(response) {
+            if (response.success) {
+              let finalUrl;
+              
+              // Handle base64 data - response structure has properties at root level
+              if (response.logoBase64) {
+                finalUrl = `data:${response.mimeType};base64,${response.logoBase64}`;
+              } 
+              // Handle direct URLs (non-Drive URLs)
+              else if (response.directUrl) {
+                finalUrl = response.directUrl;
+              }
+              
+              if (finalUrl) {
+                logoCache.set(teamId, finalUrl);
+                imgElement.src = finalUrl;
+                resolve(finalUrl);
+              } else {
+                resolve(null);
+              }
+            } else {
+              resolve(null);
+            }
+            logoLoadingPromises.delete(teamId);
+          })
+          .withFailureHandler(function(error) {
+            console.error('Failed to load logo for team', teamId, error);
+            logoLoadingPromises.delete(teamId);
+            resolve(null);
+          })
+          .getTeamLogoAsBase64(teamId);
+      });
+      
+      logoLoadingPromises.set(teamId, loadPromise);
+    }
+
+    // Batch load logos for performance
+    function batchLoadLogos(teamIds) {
+      const uncachedIds = teamIds.filter(id => !logoCache.has(id) && id);
+      
+      if (uncachedIds.length === 0) return;
+      
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if (response.success && response.logos) {
+            Object.entries(response.logos).forEach(([teamId, logoData]) => {
+              let finalUrl;
+              
+              if (logoData.base64) {
+                finalUrl = `data:${logoData.mimeType};base64,${logoData.base64}`;
+              } else if (logoData.directUrl) {
+                finalUrl = logoData.directUrl;
+              }
+              
+              if (finalUrl) {
+                logoCache.set(teamId, finalUrl);
+                
+                // Update any existing img elements
+                document.querySelectorAll(`img[data-team-logo="${teamId}"]`).forEach(img => {
+                  img.src = finalUrl;
+                });
+              }
+            });
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Failed to batch load logos', error);
+        })
+        .getMultipleTeamLogosAsBase64(uncachedIds);
+    }
+
+    // =============================================================================
+    // UI MANAGEMENT FUNCTIONS
+    // =============================================================================
+
     function showMainApp() {
         document.getElementById('initial-view-container').classList.add('hidden');
         document.getElementById('main-app-layout').classList.remove('hidden');
@@ -126,6 +270,9 @@
             return parseInt(a) - parseInt(b);
         });
         
+        // Collect all team IDs for batch logo loading
+        const allTeamIds = [];
+        
         // Render each division group
         sortedDivisions.forEach(division => {
             // Division header
@@ -137,16 +284,20 @@
             // Teams in this division
             teamsByDivision[division].forEach(team => {
                 const isFavorite = favorites.includes(team.teamId);
+                allTeamIds.push(team.teamId);
                 
                 const teamCard = document.createElement('div');
                 teamCard.className = 'team-card bg-slate-700/20 hover:bg-slate-700/40 p-3 transition-colors cursor-pointer border-b border-slate-600/20 last:border-b-0';
                 teamCard.dataset.teamId = team.teamId;
                 
+                const defaultLogoUrl = appConfig.defaultLogoUrl || 'https://www.quakeworld.nu/w/resources/assets/qwiki-logo.png';
+                
                 teamCard.innerHTML = `
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-3 flex-1 min-w-0">
                             <div class="flex-shrink-0">
-                                <img src="${team.logoUrl || appConfig.defaultLogoUrl}" 
+                                <img src="${defaultLogoUrl}" 
+                                     data-team-logo="${team.teamId}"
                                      alt="${team.teamName} logo" 
                                      class="w-8 h-8 rounded object-cover bg-slate-600">
                             </div>
@@ -183,6 +334,11 @@
             });
         });
         
+        // Batch load all logos after rendering
+        if (allTeamIds.length > 0) {
+            batchLoadLogos(allTeamIds);
+        }
+        
         console.log('Browse All Teams rendered successfully');
     }
 
@@ -201,7 +357,11 @@
             updateNavigationButtons();
         }
         
-        document.getElementById('left-panel-team-logo-area').querySelector('img').src = logoUrl || appConfig.defaultLogoUrl;
+        // Update logo with base64 support
+        const logoImg = document.getElementById('left-panel-team-logo-area').querySelector('img');
+        logoImg.dataset.teamLogo = teamId;
+        loadTeamLogo(teamId, logoImg, logoUrl); // logoUrl as fallback
+        
         const rosterArea = document.getElementById('left-panel-team-roster-area');
         rosterArea.innerHTML = ''; 
         
@@ -244,77 +404,80 @@
     }
     
     function clearActiveTeamDisplay() {
-        document.getElementById('left-panel-team-logo-area').querySelector('img').src = appConfig.defaultLogoUrl; 
+        const defaultUrl = appConfig.defaultLogoUrl || 'https://www.quakeworld.nu/w/resources/assets/qwiki-logo.png';
+        document.getElementById('left-panel-team-logo-area').querySelector('img').src = defaultUrl; 
         document.getElementById('left-panel-team-roster-area').innerHTML = '<p class="text-xs text-slate-400 italic">No active team selected.</p>';
     }
 
-function handleJoinTeamSubmit(event) {
-    event.preventDefault();
-    const form = event.target;
-    const joinCode = form.joinCode.value;
-    const initials = form.joinInitials.value;
-    // The 'displayName' variable is no longer needed here.
-    displayFormMessage("Attempting to join team...", true, 'join');
-    google.script.run
-        .withSuccessHandler(function(response){
-            displayFormMessage(response.message, response.success, 'join');
-            if (response.success) { setTimeout(() => window.location.reload(), 1500); }
-        })
-        .withFailureHandler(function(error){
-            displayFormMessage(`Error: ${error.message || 'Failed to join team.'}`, false, 'join');
-        })
-        // Updated call with the new, simpler signature.
-        .joinTeamWithCode(joinCode, initials);
-}
+    // =============================================================================
+    // FORM HANDLERS
+    // =============================================================================
 
-function handleProfileUpdateSubmit(event) {
-    event.preventDefault();
-    const form = event.target;
-    const saveButton = document.getElementById('save-profile-btn');
-    const originalButtonText = saveButton.innerHTML;
-    saveButton.innerHTML = 'Saving...';
-    saveButton.disabled = true;
+    function handleJoinTeamSubmit(event) {
+        event.preventDefault();
+        const form = event.target;
+        const joinCode = form.joinCode.value;
+        const initials = form.joinInitials.value;
+        displayFormMessage("Attempting to join team...", true, 'join');
+        google.script.run
+            .withSuccessHandler(function(response){
+                displayFormMessage(response.message, response.success, 'join');
+                if (response.success) { setTimeout(() => window.location.reload(), 1500); }
+            })
+            .withFailureHandler(function(error){
+                displayFormMessage(`Error: ${error.message || 'Failed to join team.'}`, false, 'join');
+            })
+            .joinTeamWithCode(joinCode, initials);
+    }
 
-    const profileData = {
-        displayName: form.displayName.value,
-        discordUsername: form.discordUsername.value
-    };
+    function handleProfileUpdateSubmit(event) {
+        event.preventDefault();
+        const form = event.target;
+        const saveButton = document.getElementById('save-profile-btn');
+        const originalButtonText = saveButton.innerHTML;
+        saveButton.innerHTML = 'Saving...';
+        saveButton.disabled = true;
 
-    google.script.run
-        .withSuccessHandler(function(response) {
-            const messageDiv = document.getElementById('profile-form-message');
-            if (response.success) {
-                messageDiv.className = 'mt-4 text-xs text-green-400';
-                messageDiv.textContent = 'Profile updated successfully!';
-                
-                // Update local context and UI immediately
-                if (userContext && response.player) {
-                    userContext.displayName = response.player.displayName;
-                    userContext.discordUsername = response.player.discordUsername;
-                    populateUserPanel(userContext);
+        const profileData = {
+            displayName: form.displayName.value,
+            discordUsername: form.discordUsername.value
+        };
+
+        google.script.run
+            .withSuccessHandler(function(response) {
+                const messageDiv = document.getElementById('profile-form-message');
+                if (response.success) {
+                    messageDiv.className = 'mt-4 text-xs text-green-400';
+                    messageDiv.textContent = 'Profile updated successfully!';
+                    
+                    // Update local context and UI immediately
+                    if (userContext && response.player) {
+                        userContext.displayName = response.player.displayName;
+                        userContext.discordUsername = response.player.discordUsername;
+                        populateUserPanel(userContext);
+                    }
+
+                    setTimeout(() => {
+                        document.getElementById('profile-editor-modal').classList.add('hidden');
+                        messageDiv.textContent = ''; // Clear message on close
+                    }, 1000);
+
+                } else {
+                    messageDiv.className = 'mt-4 text-xs text-red-400';
+                    messageDiv.textContent = `Error: ${response.message}`;
                 }
-
-                setTimeout(() => {
-                    document.getElementById('profile-editor-modal').classList.add('hidden');
-                    messageDiv.textContent = ''; // Clear message on close
-                }, 1000);
-
-            } else {
+                saveButton.innerHTML = originalButtonText;
+                saveButton.disabled = false;
+            })
+            .withFailureHandler(function(error) {
+                const messageDiv = document.getElementById('profile-form-message');
                 messageDiv.className = 'mt-4 text-xs text-red-400';
-                messageDiv.textContent = `Error: ${response.message}`;
-            }
-            saveButton.innerHTML = originalButtonText;
-            saveButton.disabled = false;
-        })
-        .withFailureHandler(function(error) {
-            const messageDiv = document.getElementById('profile-form-message');
-            messageDiv.className = 'mt-4 text-xs text-red-400';
-            messageDiv.textContent = `Error: ${error.message}`;
-            saveButton.innerHTML = originalButtonText;
-            saveButton.disabled = false;
-        })
-        .updateMyProfile(profileData);
-}
+                messageDiv.textContent = `Error: ${error.message}`;
+                saveButton.innerHTML = originalButtonText;
+                saveButton.disabled = false;
+            })
+            .updateMyProfile(profileData);
+    }
 
     function handleCreateTeamSubmit(event) {
         event.preventDefault();
@@ -331,8 +494,12 @@ function handleProfileUpdateSubmit(event) {
             .withFailureHandler(function(error){
                  displayFormMessage(`Error: ${error.message || 'Failed to create team.'}`, false, 'create');
             })
-            .createNewTeam(teamData, creatorInitials, creatorDisplayName); // Matches WebAppController
+            .createNewTeam(teamData, creatorInitials, creatorDisplayName);
     }
+
+    // =============================================================================
+    // INITIALIZATION
+    // =============================================================================
 
     function handleInitialView() {
         console.log("[ClientScript] handleInitialView called.");
@@ -436,7 +603,12 @@ function handleProfileUpdateSubmit(event) {
             })
             .getLightweightTeamList();
     }
-// --- Profile Editor Modal Events (V2 - Image is always visible) ---
+
+    // =============================================================================
+    // EVENT LISTENERS
+    // =============================================================================
+
+    // --- Profile Editor Modal Events (V2 - Image is always visible) ---
     const profileModal = document.getElementById('profile-editor-modal');
     const editProfileLink = document.getElementById('edit-profile-link');
     const profileForm = document.getElementById('profile-editor-form');
@@ -451,10 +623,10 @@ function handleProfileUpdateSubmit(event) {
                 profileForm.discordUsername.value = userContext.discordUsername || '';
                 document.getElementById('profile-form-message').textContent = '';
                 
-                // Set the help image source from configuration when the modal opens
+                // Load the Discord help image using the Drive image proxy
                 const helpImage = document.getElementById('discord-info-image');
                 if (helpImage && window.BLOCK_CONFIG_CLIENT && window.BLOCK_CONFIG_CLIENT.WEB_APP.DISCORD_HELP_IMAGE_URL) {
-                    helpImage.src = window.BLOCK_CONFIG_CLIENT.WEB_APP.DISCORD_HELP_IMAGE_URL;
+                    loadDriveImage(window.BLOCK_CONFIG_CLIENT.WEB_APP.DISCORD_HELP_IMAGE_URL, helpImage);
                 }
 
                 profileModal.classList.remove('hidden');
