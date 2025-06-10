@@ -36,6 +36,7 @@
     console.log("[ClientScript] AppConfig initialized:", JSON.stringify(appConfig, null, 2));
     let currentActiveTeamId = null; 
     let clientLastLoadTimestamp = null;
+    window.allTeamsList = [];
 
     // Week Navigation State
     let showingFutureWeeks = false; // false = current+next, true = weeks +2 and +3

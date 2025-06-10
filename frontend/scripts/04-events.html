@@ -17,6 +17,7 @@
         console.log("[ClientScript] DOMContentLoaded. Initializing page...");
         if (typeof userContext !== 'undefined' && userContext !== null) { // Ensure userContext is defined before proceeding
              handleInitialView();
+             renderFavoritesList();
         } else {
             console.error("[ClientScript] userContext is undefined at DOMContentLoaded. Page may not render correctly.");
             // Optionally display a generic error message in 'initial-view-container'
@@ -207,51 +208,66 @@
         console.log("[ClientScript] DOMContentLoaded event listeners attached.");
     });
 
-    /**
-     * Handle toggling favorite status for a team
+/**
+     * Handle toggling favorite status for a team using a fully optimistic approach.
+     * Instantly updates the UI and then syncs with the server.
      */
     function handleFavoriteToggle(starBtn) {
         const teamId = starBtn.dataset.teamId;
-        const isCurrentlyFavorite = starBtn.dataset.isFavorite === 'true';
-        const starIcon = starBtn.querySelector('.lucide-star');
-        
-        if (!teamId || !starIcon) {
-            console.error('Missing teamId or star icon for favorite toggle');
+        if (!teamId) {
+            console.error('Missing teamId for favorite toggle');
             return;
         }
-        
-        // Optimistic UI update
+
+        const isCurrentlyFavorite = starBtn.dataset.isFavorite === 'true';
         const newFavoriteStatus = !isCurrentlyFavorite;
-        updateStarAppearance(starIcon, newFavoriteStatus);
-        starBtn.dataset.isFavorite = newFavoriteStatus.toString();
-        
-        // Backend call
+
+        // --- 1. OPTIMISTIC CLIENT-SIDE UPDATES ---
+
+        // a) Update local data array first
+        const favoriteSet = new Set(userContext.favorites || []);
+        if (newFavoriteStatus) {
+            favoriteSet.add(teamId);
+        } else {
+            favoriteSet.delete(teamId);
+        }
+        const newFavoritesArray = Array.from(favoriteSet);
+        const originalFavoritesArray = userContext.favorites; // Keep for error recovery
+        userContext.favorites = newFavoritesArray;
+
+        // b) Instantly re-render both lists to keep them in sync
+        renderFavoritesList();
+        // Also re-render the main browse list to update its star icon state
+        renderBrowseAllTeams(window.allTeamsList, userContext.favorites);
+
+
+        // --- 2. BACKGROUND SERVER SYNC ---
+
         google.script.run
             .withSuccessHandler(function(response) {
                 if (response && response.success) {
-                    console.log('Favorite toggled successfully:', response.favorites);
-                    // Update userContext.favorites with the new list
-                    if (userContext) {
-                        userContext.favorites = response.favorites || [];
-                    }
-                    // --- NEW ---
-                    // Re-render the favorites list to show the change
-                    renderFavoritesList();
-                    // --- END NEW ---
+                    console.log('Server confirmed favorite toggle:', response.favorites);
+                    // Silently re-sync with the server's definitive list, though it should match.
+                    userContext.favorites = response.favorites || [];
                 } else {
-                    console.error('Failed to toggle favorite:', response);
-                    // Revert optimistic update on failure
-                    updateStarAppearance(starIcon, isCurrentlyFavorite);
-                    starBtn.dataset.isFavorite = isCurrentlyFavorite.toString();
+                    // Handle cases where the server returns success:false
+                    console.error('Failed to toggle favorite on server:', response);
+                    // Revert UI to original state
+                    userContext.favorites = originalFavoritesArray;
+                    renderFavoritesList();
+                    renderBrowseAllTeams(window.allTeamsList, userContext.favorites);
                     showStatusMessage('Failed to update favorite', 'error');
                 }
             })
             .withFailureHandler(function(error) {
                 console.error('Error toggling favorite:', error);
-                // Revert optimistic update on error
-                updateStarAppearance(starIcon, isCurrentlyFavorite);
-                starBtn.dataset.isFavorite = isCurrentlyFavorite.toString();
-                showStatusMessage('Error updating favorite', 'error');
+                
+                // --- 3. ERROR RECOVERY ---
+                // Revert UI changes if the server call fails
+                userContext.favorites = originalFavoritesArray;
+                renderFavoritesList();
+                renderBrowseAllTeams(window.allTeamsList, userContext.favorites);
+                showStatusMessage('Error saving favorite. Reverting.', 'error');
             })
             .toggleFavoriteTeam(teamId, newFavoriteStatus);
     }
