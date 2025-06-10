@@ -2,6 +2,7 @@
     /*
      * Schedule Manager - Frontend Scripts Initialization
      *
+     * @version 1.2.0 (2025-06-10) - Added weekHTMLCache for SSR
      * @version 1.1.0 (2025-06-07) - Updated to numbered filename for proper sorting order.
      * @version 1.0.0 (2025-06-07) - Extracted from monolithic index.html for better organization.
      *
@@ -46,6 +47,8 @@
         lastLoaded: null,
         players: null
     };
+    // NEW: Cache for pre-rendered HTML from the server
+    let weekHTMLCache = {};
 
     // Grid Selection State Management
     let selectedCells = new Set(); // Store selected cells as "row,col,gridId" strings

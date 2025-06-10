@@ -234,6 +234,10 @@
                     if (userContext) {
                         userContext.favorites = response.favorites || [];
                     }
+                    // --- NEW ---
+                    // Re-render the favorites list to show the change
+                    renderFavoritesList();
+                    // --- END NEW ---
                 } else {
                     console.error('Failed to toggle favorite:', response);
                     // Revert optimistic update on failure

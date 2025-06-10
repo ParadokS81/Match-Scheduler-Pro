@@ -1,12 +1,14 @@
 /**
- * Schedule Manager - Web App API (Phase 1C Enhanced / 1D Refactor)
+ * Schedule Manager - Web App API (Phase 1D Refactor)
  *
+ * @version 1.2.0 (2025-06-10) - Added SSR endpoint foundation
  * @version 1.1.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
  *
  * Description: Extended API functions for web app frontend.
  * Uses centralized ROLES/PERMISSIONS and functions from PermissionManager.js and PlayerDataManager.js.
  *
  * CHANGELOG:
+ * 1.2.0 - 2025-06-10 - Added api_getPreRenderedScheduleGrids foundation for server-side rendering.
  * 1.1.1 - 2025-05-30 - Updated to use PermissionManager & PlayerDataManager for user context/permissions.
  * 1.1.0 - 2025-05-30 - Phase 1C: Added logo management endpoints and enhanced validation.
  * 1.0.0 - 2025-05-29 - Initial implementation.
@@ -554,6 +556,132 @@ function updatePlayerAvailability_API(teamId, action, timeSlots) { // NEW NAME
   }
 }
 
+// =============================================================================
+// SERVER-SIDE RENDERING APIS
+// =============================================================================
+
+/**
+ * Gets pre-rendered HTML for the schedule grids for a given team.
+ * This version renders all weeks in the 4-week cache to support instant client-side navigation.
+ * @param {string} teamId The ID of the team to render.
+ * @return {Object} An object containing the HTML strings and the raw data for caching.
+ */
+function api_getPreRenderedScheduleGrids(teamId) {
+    const CONTEXT = "WebAppAPI.api_getPreRenderedScheduleGrids";
+    try {
+        const activeUser = getActiveUser();
+        if (!activeUser) {
+            return createErrorResponse("Authentication required.");
+        }
+        const userEmail = activeUser.getEmail();
+
+        // Fetch all 4 weeks of data to populate the client's cache.
+        const allWeeksToFetch = getAllAvailableWeeks();
+        if (allWeeksToFetch.length < 4) {
+            return createErrorResponse("Could not calculate the required 4-week range.");
+        }
+        const firstWeek = allWeeksToFetch[0];
+        const lastWeek = allWeeksToFetch[3];
+
+        const scheduleDataResult = getTeamScheduleRange(userEmail, teamId, firstWeek.year, firstWeek.week, lastWeek.year, lastWeek.week);
+
+        if (!scheduleDataResult.success) {
+            return scheduleDataResult; // Pass the error through
+        }
+        
+        const scheduleData = scheduleDataResult;
+        
+        // --- HTML Generation ---
+        // Render HTML for all weeks fetched.
+        const renderedWeeksHTML = {};
+        if (scheduleData.weeks && scheduleData.weeks.length > 0) {
+            scheduleData.weeks.forEach((weekData, index) => {
+                const gridId = `week${index + 1}`; // This is a temporary ID for generation
+                if (weekData && !weekData.error) {
+                    const weekKey = `${weekData.year}-W${weekData.weekNumber}`;
+                    renderedWeeksHTML[weekKey] = _api_generateGridHTML(gridId, weekData);
+                }
+            });
+        }
+
+        return createSuccessResponse({
+            renderedWeeksHTML: renderedWeeksHTML,
+            scheduleData: scheduleData // The raw data for client-side caching
+        }, "Schedule grids rendered successfully.");
+
+    } catch (e) {
+        return handleError(e, CONTEXT);
+    }
+}
+
+/**
+ * Generates the full HTML for a single week's availability grid, including the header and body.
+ * This is a private helper function for the server-side rendering API.
+ * @param {string} gridId The ID for this grid ('week1' or 'week2').
+ * @param {Object} scheduleDataForWeek The schedule data object for a single week, from readWeekBlockData.
+ * @return {string} The complete HTML string for the table's thead and tbody.
+ */
+function _api_generateGridHTML(gridId, scheduleDataForWeek) {
+  if (!scheduleDataForWeek || scheduleDataForWeek.error) {
+    return `<thead><tr><th class="p-4 text-red-400">Error</th></tr></thead><tbody><tr><td class="p-4 text-red-400">Error loading data for this week.</td></tr></tbody>`;
+  }
+
+  // --- Generate Header (thead) ---
+  const monday = getMondayFromWeekNumberAndYear(scheduleDataForWeek.year, scheduleDataForWeek.weekNumber);
+  let headerHtml = '<thead><tr>';
+  headerHtml += '<th class="time-label p-1 w-16 sm:w-20 text-xs font-medium text-slate-400 text-center sticky left-0 bg-slate-800 z-10">Time</th>';
+  
+  for (let i = 0; i < 7; i++) {
+    const dayDate = new Date(monday);
+    dayDate.setDate(monday.getDate() + i);
+    const dayName = BLOCK_CONFIG.LAYOUT.DAY_ABBREV[i];
+    const dateString = `${dayDate.getDate()}`; // Just the number, e.g., "19"
+    
+    // Add ordinal suffix (st, nd, rd, th)
+    let suffix = 'th';
+    if (dateString.endsWith('1') && !dateString.endsWith('11')) suffix = 'st';
+    else if (dateString.endsWith('2') && !dateString.endsWith('12')) suffix = 'nd';
+    else if (dateString.endsWith('3') && !dateString.endsWith('13')) suffix = 'rd';
+
+    const isWeekend = i >= 5;
+    const headerTextColor = isWeekend ? 'text-amber-400' : 'text-sky-400';
+    
+    headerHtml += `<th class="day-header-full p-1 text-xs font-medium ${headerTextColor} text-center bg-slate-700/50 rounded-t-sm cursor-pointer hover:bg-slate-600/50" onclick="selectDayColumn(${i}, '${gridId}')">${dayName} ${dateString}${suffix}</th>`;
+  }
+  headerHtml += '</tr></thead>';
+
+  // --- Generate Body (tbody) ---
+  let bodyHtml = `<tbody id="availability-grid-body-${gridId}">`;
+  const timeSlots = scheduleDataForWeek.timeSlots || [];
+  
+  timeSlots.forEach((time, timeIndex) => {
+    bodyHtml += '<tr>';
+    bodyHtml += `<td class="time-label p-1 text-xs text-slate-400 text-center font-mono whitespace-nowrap sticky left-0 bg-slate-800 z-10 rounded-l-sm cursor-pointer hover:bg-slate-700" onclick="selectTimeRow(${timeIndex}, '${gridId}')">${time}</td>`;
+
+    if (scheduleDataForWeek.availability && scheduleDataForWeek.availability[timeIndex] && scheduleDataForWeek.availability[timeIndex].days) {
+      scheduleDataForWeek.availability[timeIndex].days.forEach((dayData, dayIndex) => {
+        const isWeekend = dayIndex >= 5;
+        const cellBg = isWeekend ? 'bg-slate-700/30 hover:bg-slate-600/50' : 'bg-slate-700/10 hover:bg-slate-700/30';
+        const cellText = (dayData.initials && dayData.initials.length > 0) ? dayData.initials.join(', ') : '';
+        const escapedCellText = escapeHTML(cellText); // Use the security utility
+
+        bodyHtml += `<td class="availability-cell ${cellBg} cursor-pointer rounded-sm h-9 sm:h-10 border border-slate-700/50 align-middle${dayIndex === 6 ? ' rounded-r-sm' : ''}" onclick="handleCellClick(${timeIndex}, ${dayIndex}, '${gridId}')"><div class="leading-tight">${escapedCellText}</div></td>`;
+      });
+    } else {
+      // Fallback for malformed data
+      for (let i = 0; i < 7; i++) {
+        const isWeekend = i >= 5;
+        const cellBg = isWeekend ? 'bg-slate-700/30 hover:bg-slate-600/50' : 'bg-slate-700/10 hover:bg-slate-700/30';
+        bodyHtml += `<td class="availability-cell ${cellBg} cursor-pointer rounded-sm h-9 sm:h-10 border border-slate-700/50 align-middle${i === 6 ? ' rounded-r-sm' : ''}" onclick="handleCellClick(${timeIndex}, ${i}, '${gridId}')"><div class="leading-tight"></div></td>`;
+      }
+    }
+    bodyHtml += '</tr>';
+  });
+
+  bodyHtml += '</tbody>';
+
+  return headerHtml + bodyHtml;
+}
 
 // =============================================================================
 // UTILITY APIS (Retained, ensure permissions if needed)

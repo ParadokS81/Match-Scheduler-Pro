@@ -1,6 +1,7 @@
 /**
  * Schedule Manager - Configuration System (Web App Edition)
  *
+ * @version 2.5.1 (2025-06-10) - Added escapeHTML utility function
  * @version 2.5.0 (2025-05-30) - Phase 1D Major Refactor (Permissions Moved)
  *
  * Description: System-wide configuration for multi-team web application.
@@ -8,6 +9,7 @@
  * Core player data retrieval functions (getUserTeams, getUserDisplayName) moved to PlayerDataManager.js.
  *
  * CHANGELOG:
+ * 2.5.1 - 2025-06-10 - Added escapeHTML utility function for server-side rendering security.
  * 2.5.0 - 2025-05-30 - Removed ROLES, PERMISSIONS constants, getUserRole, userHasPermission, getUserTeams, getUserDisplayName (moved to respective managers).
  * 2.4.0 - 2025-05-30 - Added ALLOWED_DIVISIONS, MAX_PLAYER_DISPLAY_NAME_LENGTH, MAX_PLAYER_INITIALS_LENGTH. Added MAX_WEEKS_PER_TEAM.
  * 2.3.0 - 2025-05-30 - Added LOGO_URL column to Teams schema, updated Drive configuration.
@@ -20,7 +22,7 @@
 const BLOCK_CONFIG = {
  
   // VERSION & METADATA
-  VERSION: "2.5.0", // Updated version
+  VERSION: "2.5.1", // Updated version
   ARCHITECTURE: "WEB_APP",
   CREATED: "2025-05-30", 
   PHASE: "1D_REFACTOR_PERMISSIONS", // Reflecting current refactoring stage
@@ -242,6 +244,21 @@ function getMondayFromWeekNumberAndYear(year, weekNumber) {
 // =============================================================================
 // GENERIC VALIDATION UTILITIES (Retained in Configuration.js)
 // =============================================================================
+
+/**
+ * Escapes HTML special characters in a string to prevent XSS.
+ * @param {string} text The string to escape.
+ * @return {string} The escaped string.
+ */
+function escapeHTML(text) {
+  if (text === null || typeof text === 'undefined') return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
 
 function validateTeamName(teamName) {
   const errors = [];
@@ -466,4 +483,22 @@ function clearTeamScheduleCache(teamId) {
   } catch (e) {
     return handleError(e, CONTEXT);
   }
+}
+
+/**
+ * Gets the four-week block (current + 3 future) for client-side caching.
+ * @return {Array<Object>} An array of four week objects, e.g., [{year: 2025, week: 24}, ...].
+ */
+function getAllAvailableWeeks() {
+    const now = new Date();
+    const weeks = [];
+    for (let i = 0; i < 4; i++) {
+        const weekDate = new Date(now);
+        weekDate.setDate(now.getDate() + (i * 7));
+        weeks.push({
+            year: weekDate.getFullYear(),
+            week: getISOWeekNumber(weekDate)
+        });
+    }
+    return weeks;
 }

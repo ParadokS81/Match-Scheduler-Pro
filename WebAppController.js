@@ -1,6 +1,7 @@
 /**
  * Schedule Manager - Web App Controller (Phase 1C Enhanced / 1D Refactor)
  *
+ * @version 1.2.0 (2025-06-10) - Added SSR endpoint
  * @version 1.1.3 (2025-06-02) - FIXED: Recursion issues in controller functions
  * @version 1.1.2 (2025-05-31) - Corrected all calls to global functions for direct invocation.
  * @version 1.1.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
@@ -9,6 +10,7 @@
  * Uses centralized ROLES/PERMISSIONS and functions from PermissionManager.js.
  *
  * CHANGELOG:
+ * 1.2.0 - 2025-06-10 - Added getPreRenderedScheduleGrids for server-side rendering.
  * 1.1.3 - 2025-06-02 - FIXED: Renamed 6 controller functions to prevent infinite recursion (getUserStatus, updateUserDisplayName, refreshUserSession, getSystemInfo, logFrontendError, checkForScheduleUpdates)
  * 1.1.2 - 2025-05-31 - Ensured all functions from WebAppAPI.js and other managers are called directly (e.g., getUserContext() instead of WebAppAPI.getUserContext()).
  * 1.1.1 - 2025-05-30 - Updated doGet to use WebAppAPI.getUserContext for template data.
@@ -198,6 +200,11 @@ function getTeamSchedulesForDisplay(teamId, year1, week1, year2, week2) {
         // Or a simple error structure:
         // return { success: false, message: `Error fetching schedule range: ${e.message}`, error: String(e) };
     }
+}
+
+// --- Server-Side Rendering (NEW) ---
+function getPreRenderedScheduleGrids(teamId) {
+    return api_getPreRenderedScheduleGrids(teamId); // DIRECT CALL to global function from WebAppAPI.js
 }
 
 // --- Availability Templates ---
