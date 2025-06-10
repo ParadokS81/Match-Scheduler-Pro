@@ -223,83 +223,7 @@
             if(userContext) document.getElementById('left-panel-user-role').textContent = userContext.role ? formatRole(userContext.role) : 'Guest';
         }
     }
-    Excellent, I'm glad the core fix is working and the app is loading correctly. Now we can focus on these important UI/UX details.
 
-I've analyzed your request regarding the right-side panels and the favorites functionality. You've correctly identified that the favorites system is only partially implemented. The star lights up, but the UI doesn't update the "Favorites" list itself.
-
-Here is a comprehensive plan to implement the functionality and layout you've envisioned.
-
-Plan for Favorites and Right-Side Panel Layout
-This plan is broken into two parts: first, we'll fix the favorites functionality to make it work completely. Second, we'll address the visual layout and your design goals.
-
-Part 1: Implementing Favorites Functionality
-The issue is that after you successfully favorite a team, the frontend isn't being told to "redraw" the favorites list. We'll fix this by creating a dedicated rendering function and calling it at the right times.
-
-Step 1.1: Create the Favorites List Renderer
-We need a new JavaScript function that knows how to build the HTML for the favorites list.
-
-Please add the following new function to your frontend/scripts/02c-team-ui.html file. A good place is near the top, after the file's introductory comment block.
-
-HTML
-
-<script>
-    /*
-     * ... existing introductory comments ...
-     */
-
-    /**
-     * Renders the list of favorite teams in the right-side panel.
-     * Also displays placeholder slots if no favorites are selected.
-     */
-    function renderFavoritesList() {
-        const container = document.getElementById('favorite-opponents-list');
-        if (!container) return;
-
-        const favoritedTeamIds = userContext.favorites || [];
-        const allTeams = [];
-        document.querySelectorAll('#browse-all-teams-list .team-card').forEach(card => {
-            allTeams.push({
-                teamId: card.dataset.teamId,
-                teamName: card.querySelector('.team-name').textContent,
-                logoUrl: card.querySelector('img').src,
-                leaderName: card.querySelector('.text-xs span').textContent.replace('Leader: ', '')
-            });
-        });
-
-        const favoriteTeams = allTeams.filter(team => favoritedTeamIds.includes(team.teamId));
-
-        // Clear previous content
-        container.innerHTML = '';
-
-        if (favoriteTeams.length > 0) {
-            favoriteTeams.forEach(team => {
-                const teamCard = document.createElement('div');
-                // Note: We use different classes for favorite cards if we want different styling/behavior
-                teamCard.className = 'favorite-team-card flex items-center justify-between bg-slate-700/20 hover:bg-slate-700/40 p-2 rounded transition-colors cursor-pointer';
-                teamCard.dataset.teamId = team.teamId;
-
-                teamCard.innerHTML = `
-                    <div class="flex items-center space-x-2 flex-1 min-w-0">
-                        <img src="${team.logoUrl}" alt="${team.teamName} logo" class="w-6 h-6 rounded-sm object-cover bg-slate-600">
-                        <span class="text-sm font-medium text-slate-200 truncate">${team.teamName}</span>
-                    </div>
-                    <div class="flex items-center space-x-2 flex-shrink-0">
-                        </div>
-                `;
-                container.appendChild(teamCard);
-            });
-        } else {
-            // As you requested, show placeholder slots to encourage use
-            const placeholderCount = 3;
-            for (let i = 0; i < placeholderCount; i++) {
-                const placeholder = document.createElement('div');
-                placeholder.className = 'p-2 border-2 border-dashed border-slate-700 rounded text-center';
-                placeholder.innerHTML = `<span class="text-xs text-slate-600">Favorite Slot ${i + 1}</span>`;
-                container.appendChild(placeholder);
-            }
-        }
-    }
-    
     /**
      * Renders the Browse All Teams list in the right sidebar
      * @param {Array} teams - Array of lightweight team objects from getLightweightTeamList()
@@ -659,7 +583,6 @@ HTML
                     const favorites = userContext.favorites || [];
                     
                     renderBrowseAllTeams(teams, favorites);
-                    renderFavoritesList(); 
                     
                     // Store timestamp for smart refresh
                     window.teamsListTimestamp = response.timestamp;
