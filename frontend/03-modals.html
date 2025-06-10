@@ -10,8 +10,7 @@
  * Provides: Save Template Modal, Load Template Modal, Team Roster Modal DOM structures
  * Requires: Template functions from 03-templates.html for functionality
 -->
-  <!-- Save Template Modal -->
-  <div id="save-template-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
+<div id="save-template-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
     <div class="bg-slate-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
       <h3 class="text-xl font-semibold text-sky-400 mb-4">Save Availability Template</h3>
       <p class="text-slate-300 mb-4">Which week would you like to save as your template?</p>
@@ -36,7 +35,6 @@
     </div>
   </div>
 
-  <!-- Load Template Modal -->
   <div id="load-template-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
     <div class="bg-slate-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
       <h3 class="text-xl font-semibold text-sky-400 mb-4">Load Availability Template</h3>
@@ -62,7 +60,6 @@
     </div>
   </div>
 
-  <!-- Team Roster Modal -->
   <div id="team-roster-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
     <div class="bg-slate-800 p-6 rounded-lg shadow-xl max-w-lg w-full mx-4">
       <div class="flex items-center justify-between mb-4">
@@ -74,7 +71,6 @@
         </button>
       </div>
       
-      <!-- Loading State -->
       <div id="team-roster-loading" class="text-center py-8">
         <svg class="animate-spin h-8 w-8 text-sky-500 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -83,9 +79,7 @@
         <p class="text-slate-300">Loading team roster...</p>
       </div>
       
-      <!-- Content -->
       <div id="team-roster-content" class="hidden">
-        <!-- Team Header -->
         <div id="team-roster-header" class="flex items-center space-x-3 mb-6 p-4 bg-slate-700/30 rounded-lg">
           <img id="team-roster-logo" src="" alt="Team logo" class="w-12 h-12 rounded object-cover bg-slate-600">
           <div>
@@ -94,7 +88,6 @@
           </div>
         </div>
         
-        <!-- Team Leader Contact -->
         <div id="team-roster-leader" class="mb-6 p-4 bg-sky-900/20 border border-sky-700/50 rounded-lg">
           <h5 class="text-sm font-semibold text-sky-400 mb-2 flex items-center">
             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -106,12 +99,10 @@
             <p id="team-roster-leader-name" class="text-slate-200 font-medium"></p>
             <p id="team-roster-leader-initials" class="text-sky-300 font-mono text-sm"></p>
             <div id="team-roster-leader-contact" class="mt-2 space-y-1 text-sm text-slate-300">
-              <!-- Contact info will be populated here -->
-            </div>
+              </div>
           </div>
         </div>
         
-        <!-- Roster Members -->
         <div>
           <h5 class="text-sm font-semibold text-slate-300 mb-3 flex items-center">
             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -120,12 +111,10 @@
             All Team Members
           </h5>
           <div id="team-roster-members" class="space-y-2">
-            <!-- Roster members will be populated here -->
-          </div>
+            </div>
         </div>
       </div>
       
-      <!-- Error State -->
       <div id="team-roster-error" class="hidden text-center py-8">
         <svg class="w-12 h-12 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -162,5 +151,4 @@
       </div>
     </form>
   </div>
-</div>
 </div>
