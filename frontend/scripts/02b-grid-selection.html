@@ -46,18 +46,31 @@
     }
 
     function updateCellVisualState(row, col, gridId, isSelected) {
-        const grid = document.getElementById('availability-grid-' + gridId);
-        if (!grid) return;
-        
-        const cell = grid.querySelector('tbody tr:nth-child(' + (row + 1) + ') td:nth-child(' + (col + 2) + ')');
-        if (!cell) return;
-        
-        if (isSelected) {
-            cell.classList.add('cell-selected');
-        } else {
-            cell.classList.remove('cell-selected');
-        }
+    const grid = document.getElementById('availability-grid-' + gridId);
+    
+    // --- DEBUG START ---
+    if (!grid) {
+        console.error(`[DEBUG] updateCellVisualState: Could not find grid with id 'availability-grid-${gridId}'`);
+        return;
     }
+    // --- DEBUG END ---
+
+    const cell = grid.querySelector('tbody tr:nth-child(' + (row + 1) + ') td:nth-child(' + (col + 2) + ')');
+    
+    // --- DEBUG START ---
+    if (!cell) {
+        console.error(`[DEBUG] updateCellVisualState: Could not find cell at row ${row}, col ${col} in grid ${gridId}.`);
+        return;
+    }
+    // --- DEBUG END ---
+    
+    if (isSelected) {
+        cell.classList.add('cell-selected');
+    } else {
+        cell.classList.remove('cell-selected');
+    }
+  }
+
 
     function updateSelectionCounter() {
         const count = selectedCells.size;
@@ -130,4 +143,5 @@
             });
         });
     }
+
   </script>

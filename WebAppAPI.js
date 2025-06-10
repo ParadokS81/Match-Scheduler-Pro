@@ -596,10 +596,18 @@ function api_getPreRenderedScheduleGrids(teamId) {
         const renderedWeeksHTML = {};
         if (scheduleData.weeks && scheduleData.weeks.length > 0) {
             scheduleData.weeks.forEach((weekData, index) => {
-                const gridId = `week${index + 1}`; // This is a temporary ID for generation
+                
+                // --- FIX START ---
+                // Determine the correct STATIC grid container ID based on the week's position.
+                // Weeks at index 0 (Week 1) and 2 (Week 3) go into the top grid container.
+                // Weeks at index 1 (Week 2) and 3 (Week 4) go into the bottom grid container.
+                const containerId = (index === 0 || index === 2) ? 'week1' : 'week2';
+                // --- FIX END ---
+
                 if (weekData && !weekData.error) {
                     const weekKey = `${weekData.year}-W${weekData.weekNumber}`;
-                    renderedWeeksHTML[weekKey] = _api_generateGridHTML(gridId, weekData);
+                    // Pass the correct static containerId to the HTML generator
+                    renderedWeeksHTML[weekKey] = _api_generateGridHTML(containerId, weekData);
                 }
             });
         }
