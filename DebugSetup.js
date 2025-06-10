@@ -128,9 +128,12 @@ function resetStep2_createFramework() {
     }
 }
 
+// ===== UPDATED resetStep3_populateTestData WITH INDEX REBUILD =====
+
 /**
  * Step 3: Populate test data. This version DELETES and RE-CREATES test users
  * and USES THE CORRECT SIGNATURE for joinTeamByCode.
+ * NOW ALSO REBUILDS THE PLAYER_INDEX after populating data.
  */
 function resetStep3_populateTestData() {
     const STEP_NAME = "STEP 3: POPULATE MULTI-TEAM TEST DATA";
@@ -190,9 +193,7 @@ function resetStep3_populateTestData() {
              if(!teamCreationResult.success) { Logger.log(`Failed to create team ${teamConfig.name}: ${teamCreationResult.message}`); continue; }
              const newTeam = teamCreationResult.team;
              
-             // === START FIX: Corrected function call signature ===
              const leaderJoinResult = joinTeamByCode(teamConfig.creatorEmail, newTeam.joinCode, teamConfig.creatorInitials);
-             // === END FIX ===
 
              if(!leaderJoinResult.success) { Logger.log(`Leader join issue for ${teamConfig.name}: ${leaderJoinResult.message}`); }
              const promoteResult = core_adminSetTeamLeader(newTeam.teamId, teamConfig.creatorEmail, realAdmin);
@@ -207,9 +208,7 @@ function resetStep3_populateTestData() {
             for (const member of team.fakeMembers) {
                 createPlayer({ googleEmail: member.email, displayName: member.name });
                 
-                // === START FIX: Corrected function call signature ===
                 const joinResult = joinTeamByCode(member.email, team.joinCode, member.initials);
-                // === END FIX ===
 
                  if (joinResult.success) { Logger.log(`  ✅ ${member.name} (${member.initials}) joined ${team.name}`); }
                  else { Logger.log(`  ❌ ${member.name} join failed: ${joinResult.message}`); }
@@ -219,6 +218,16 @@ function resetStep3_populateTestData() {
 
         Logger.log("=== PHASE 3: Adding strategic availability patterns ===");
         generateStrategicAvailabilityPatterns(createdTeams);
+        
+        // === NEW PHASE: Rebuild Player Index ===
+        Logger.log("=== PHASE 3.5: Rebuilding PLAYER_INDEX ===");
+        const indexRebuildResult = rebuildPlayerIndex();
+        if (indexRebuildResult.success) {
+            Logger.log(`✅ Player index rebuilt: ${indexRebuildResult.data.indexEntriesCreated} entries created`);
+        } else {
+            Logger.log(`⚠️ Warning: Player index rebuild failed: ${indexRebuildResult.message}`);
+            // Don't fail the entire reset for this - the index can be rebuilt manually later
+        }
         
         Logger.log("=== PHASE 4: Organizing sheet order and verifying data ===");
         organizeSheetOrdering();
@@ -242,6 +251,71 @@ function resetStep3_populateTestData() {
     } finally {
         Logger.log("🔒 DISABLING DEBUG PERMISSION BYPASS");
         PropertiesService.getDocumentProperties().deleteProperty('DEBUG_BYPASS_PERMISSIONS');
+    }
+}
+
+// ===== OPTIONAL: Add a verification function =====
+
+/**
+ * Verifies the PLAYER_INDEX is properly populated
+ * Can be called after reset to ensure index is healthy
+ */
+function verifyPlayerIndex() {
+    const CONTEXT = "DebugSetup.verifyPlayerIndex";
+    try {
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+        
+        if (!indexSheet) {
+            return { success: false, message: "PLAYER_INDEX sheet not found" };
+        }
+        
+        const data = indexSheet.getDataRange().getValues();
+        const rowCount = data.length - 1; // Minus header
+        
+        // Get unique teams and players
+        const uniqueTeams = new Set();
+        const uniquePlayers = new Set();
+        
+        for (let i = 1; i < data.length; i++) {
+            uniqueTeams.add(data[i][0]); // TeamID
+            uniquePlayers.add(data[i][1]); // PlayerID
+        }
+        
+        Logger.log(`${CONTEXT}: Index contains ${rowCount} entries, ${uniquePlayers.size} unique players across ${uniqueTeams.size} teams`);
+        
+        // Compare with actual data
+        const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+        const playerData = playersSheet.getDataRange().getValues();
+        let expectedEntries = 0;
+        
+        for (let i = 1; i < playerData.length; i++) {
+            const row = playerData[i];
+            const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+            
+            if (row[pCols.IS_ACTIVE]) {
+                if (row[pCols.TEAM1_ID]) expectedEntries++;
+                if (row[pCols.TEAM2_ID]) expectedEntries++;
+            }
+        }
+        
+        const isHealthy = rowCount === expectedEntries;
+        
+        return {
+            success: isHealthy,
+            message: isHealthy ? 
+                `Index is healthy: ${rowCount} entries match expected ${expectedEntries}` :
+                `Index mismatch: ${rowCount} entries but expected ${expectedEntries}`,
+            stats: {
+                indexEntries: rowCount,
+                expectedEntries: expectedEntries,
+                uniquePlayers: uniquePlayers.size,
+                uniqueTeams: uniqueTeams.size
+            }
+        };
+        
+    } catch (e) {
+        return { success: false, message: `Error verifying index: ${e.message}` };
     }
 }
 

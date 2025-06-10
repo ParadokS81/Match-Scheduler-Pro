@@ -144,70 +144,199 @@ function _as_performLeaderSheetUpdates(details, newLeaderUserEmail, teamsSheet, 
 // ADMIN TEAM MANAGEMENT FUNCTIONS
 // =============================================================================
 
-function core_adminSetTeamLeader(teamId, newLeaderUserEmail, requestingUserEmail) {
-  const CONTEXT = "AdministratorService.core_adminSetTeamLeader";
+// ===== COMPLETE REPLACEMENT FOR core_adminSetTeamLeader in Administrator.js =====
+
+function core_adminSetTeamLeader(teamId, newLeaderEmail, requestingUserEmail) {
+  const CONTEXT = "Administrator.core_adminSetTeamLeader";
   try {
-    Logger.log(`${CONTEXT}: START ---- Attempting to set ${newLeaderUserEmail} as leader for team ${teamId}, requested by ${requestingUserEmail}`);
-
-    const validationResult = _as_validateSetLeaderPermissionsAndInputs(teamId, newLeaderUserEmail, requestingUserEmail);
-    if (!validationResult.success) return validationResult;
-
+    // Permission check
+    if (!userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_TEAMS)) {
+      return createErrorResponse("Permission denied: Only administrators can set team leaders.");
+    }
+    
+    // Validate inputs
+    if (!teamId || !newLeaderEmail) {
+      return createErrorResponse("Team ID and new leader email are required.");
+    }
+    
+    if (!isValidEmail(newLeaderEmail)) {
+      return createErrorResponse("Invalid email address format.");
+    }
+    
+    // Get team data
+    const teamData = getTeamData(teamId, true);
+    if (!teamData) {
+      return createErrorResponse(`Team not found: ${teamId}`);
+    }
+    
+    if (!teamData.isActive) {
+      return createErrorResponse("Cannot set leader for inactive team.");
+    }
+    
+    // Get target player data
+    const targetPlayer = getPlayerDataByEmail(newLeaderEmail, true);
+    if (!targetPlayer) {
+      return createErrorResponse(`Player not found: ${newLeaderEmail}`);
+    }
+    
+    if (!targetPlayer.isActive) {
+      return createErrorResponse("Cannot set inactive player as team leader.");
+    }
+    
+    // Check if player is on the team
+    let targetSlotKey = null;
+    if (targetPlayer.team1.teamId === teamId) {
+      targetSlotKey = 'TEAM1';
+    } else if (targetPlayer.team2.teamId === teamId) {
+      targetSlotKey = 'TEAM2';
+    }
+    
+    if (!targetSlotKey) {
+      return createErrorResponse(`Player ${newLeaderEmail} is not a member of team ${teamData.teamName}.`);
+    }
+    
+    // Update operations
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-    const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
-    if (!teamsSheet || !playersSheet) return createErrorResponse("Database error: Teams or Players sheet not found.");
-
-    const details = _as_getTeamAndLeaderDetails(teamId, newLeaderUserEmail, teamsSheet, playersSheet);
-    if (!details.success) {
-      Logger.log(`${CONTEXT}: Failed to get team/leader details: ${details.message}`);
-      return details;
+    
+    // 1. Update Teams sheet
+    const teamsUpdateResult = withProtectionBypass(() => {
+      const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+      const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
+      const teamRowData = findRow(teamsSheet, tCols.TEAM_ID, teamId);
+      
+      if (teamRowData.rowIndex === -1) {
+        throw new Error("Team row not found");
+      }
+      
+      teamsSheet.getRange(teamRowData.rowIndex + 1, tCols.LEADER_EMAIL + 1).setValue(newLeaderEmail.toLowerCase());
+      teamsSheet.getRange(teamRowData.rowIndex + 1, tCols.LAST_ACTIVE + 1).setValue(getCurrentTimestamp());
+      SpreadsheetApp.flush();
+      return true;
+    }, "Update Team Leader Email", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+    
+    if (!teamsUpdateResult) {
+      return createErrorResponse("Failed to update team leader in Teams sheet.");
     }
-
-    Logger.log(`${CONTEXT}: Retrieved details - Old Leader on Teams: ${details.oldLeaderEmailOnTeamsSheet}, New Leader PlayerSheetRow: ${details.newLeaderPlayerSheetRow}, Slot: ${details.newLeaderCurrentTeamSlot}, Current Role in Slot: ${details.newLeaderCurrentRoleInSlot}`);
-
-    if (details.oldLeaderEmailOnTeamsSheet &&
-        details.oldLeaderEmailOnTeamsSheet.toLowerCase() === newLeaderUserEmail.toLowerCase() &&
-        details.newLeaderCurrentRoleInSlot === ROLES.TEAM_LEADER) {
-      Logger.log(`${CONTEXT}: ${newLeaderUserEmail} is already leader of team ${teamId} (verified). No change needed.`);
-      return createSuccessResponse({ teamId: teamId, newLeader: newLeaderUserEmail, oldLeader: details.oldLeaderEmailOnTeamsSheet || "None" }, `${newLeaderUserEmail} is already the leader with correct role. No change made.`);
+    
+    // 2. Update Players sheet - set new leader role
+    const playersUpdateResult = withProtectionBypass(() => {
+      const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+      const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+      const targetPlayerRowData = findRow(playersSheet, pCols.PLAYER_ID, targetPlayer.playerId);
+      
+      if (targetPlayerRowData.rowIndex === -1) {
+        throw new Error("Player row not found");
+      }
+      
+      const targetPlayerRowIndex = targetPlayerRowData.rowIndex;
+      playersSheet.getRange(targetPlayerRowIndex + 1, pCols[`${targetSlotKey}_ROLE`] + 1).setValue(ROLES.TEAM_LEADER);
+      playersSheet.getRange(targetPlayerRowIndex + 1, pCols.LAST_SEEN + 1).setValue(getCurrentTimestamp());
+      
+      // === NEW: Update role in PLAYER_INDEX ===
+      const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+      if (indexSheet) {
+        const indexData = indexSheet.getDataRange().getValues();
+        for (let i = 1; i < indexData.length; i++) {
+          if (indexData[i][0] === teamId && indexData[i][1] === targetPlayer.playerId) {
+            indexSheet.getRange(i + 1, 5).setValue(ROLES.TEAM_LEADER); // Column E is Role
+            break;
+          }
+        }
+      }
+      
+      SpreadsheetApp.flush();
+      return true;
+    }, "Update Player Role to Leader", BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    
+    if (!playersUpdateResult) {
+      return createErrorResponse("Failed to update player role.");
     }
-
-    const updateSheetsResult = _as_performLeaderSheetUpdates(details, newLeaderUserEmail, teamsSheet, playersSheet);
-    if (!updateSheetsResult.success) return updateSheetsResult;
-
-    // --- CACHE INVALIDATION ---
-    const cache = CacheService.getScriptCache();
-    // 1. Invalidate TeamDataManager cache for this teamId
-    const teamCacheKeyActive = `teamData_${teamId}_incInactive_false`;
-    const teamCacheKeyInactive = `teamData_${teamId}_incInactive_true`;
-    cache.remove(teamCacheKeyActive);
-    cache.remove(teamCacheKeyInactive);
-    // Logger.log(`${CONTEXT}: Invalidated TeamDataManager cache for team ${teamId}.`);
-
-    // 2. Invalidate PlayerDataManager cache for OLD leader (if exists and different from new)
-    if (details.oldLeaderEmailOnTeamsSheet && details.oldLeaderEmailOnTeamsSheet.toLowerCase() !== newLeaderUserEmail.toLowerCase()) {
-        _pdm_invalidatePlayerCache(details.oldLeaderEmailOnTeamsSheet, details.oldLeaderPlayerId); // Assumes _pdm_invalidatePlayerCache is global from PlayerDataManager
+    
+    // 3. Remove leader role from previous leader(s)
+    const removeOldLeadersResult = withProtectionBypass(() => {
+      const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+      const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+      const allPlayersData = playersSheet.getDataRange().getValues();
+      
+      for (let i = 1; i < allPlayersData.length; i++) {
+        const row = allPlayersData[i];
+        const playerEmail = row[pCols.GOOGLE_EMAIL];
+        
+        // Skip the new leader
+        if (playerEmail.toLowerCase() === newLeaderEmail.toLowerCase()) continue;
+        
+        // Check both team slots
+        let updated = false;
+        if (row[pCols.TEAM1_ID] === teamId && row[pCols.TEAM1_ROLE] === ROLES.TEAM_LEADER) {
+          playersSheet.getRange(i + 1, pCols.TEAM1_ROLE + 1).setValue(ROLES.PLAYER);
+          updated = true;
+          
+          // === NEW: Update index for demoted leader ===
+          const demotedPlayerId = row[pCols.PLAYER_ID];
+          const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+          if (indexSheet) {
+            const indexData = indexSheet.getDataRange().getValues();
+            for (let j = 1; j < indexData.length; j++) {
+              if (indexData[j][0] === teamId && indexData[j][1] === demotedPlayerId) {
+                indexSheet.getRange(j + 1, 5).setValue(ROLES.PLAYER); // Column E is Role
+                break;
+              }
+            }
+          }
+        }
+        
+        if (row[pCols.TEAM2_ID] === teamId && row[pCols.TEAM2_ROLE] === ROLES.TEAM_LEADER) {
+          playersSheet.getRange(i + 1, pCols.TEAM2_ROLE + 1).setValue(ROLES.PLAYER);
+          updated = true;
+          
+          // === NEW: Update index for demoted leader ===
+          const demotedPlayerId = row[pCols.PLAYER_ID];
+          const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+          if (indexSheet) {
+            const indexData = indexSheet.getDataRange().getValues();
+            for (let j = 1; j < indexData.length; j++) {
+              if (indexData[j][0] === teamId && indexData[j][1] === demotedPlayerId) {
+                indexSheet.getRange(j + 1, 5).setValue(ROLES.PLAYER); // Column E is Role
+                break;
+              }
+            }
+          }
+        }
+        
+        if (updated) {
+          playersSheet.getRange(i + 1, pCols.LAST_SEEN + 1).setValue(getCurrentTimestamp());
+        }
+      }
+      
+      SpreadsheetApp.flush();
+      return true;
+    }, "Remove Old Leader Roles", BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    
+    if (!removeOldLeadersResult) {
+      Logger.log(`${CONTEXT}: Warning - Failed to remove old leader roles, but continuing.`);
     }
-
-    // 3. Invalidate PlayerDataManager cache for NEW leader
-    _pdm_invalidatePlayerCache(newLeaderUserEmail, details.newLeaderPlayerId); // Assumes _pdm_invalidatePlayerCache is global
-    // --- END CACHE INVALIDATION ---
-
-    // Clear PermissionManager role cache
-    if (details.oldLeaderEmailOnTeamsSheet && details.oldLeaderEmailOnTeamsSheet.toLowerCase() !== newLeaderUserEmail.toLowerCase()) {
-        clearUserRoleCache(details.oldLeaderEmailOnTeamsSheet);
-    }
-    clearUserRoleCache(newLeaderUserEmail);
-    if (requestingUserEmail.toLowerCase() !== (details.oldLeaderEmailOnTeamsSheet || "").toLowerCase() &&
-        requestingUserEmail.toLowerCase() !== newLeaderUserEmail.toLowerCase()){
-        clearUserRoleCache(requestingUserEmail);
-    }
-
-    Logger.log(`${CONTEXT}: END ---- Successfully assigned ${newLeaderUserEmail} as leader for team ${teamId}.`);
-    return createSuccessResponse({ teamId: teamId, newLeader: newLeaderUserEmail, oldLeader: details.oldLeaderEmailOnTeamsSheet || "None" }, `Successfully assigned ${newLeaderUserEmail} as leader for team ${teamId}.`);
-
+    
+    // Clear caches
+    _invalidateTeamCache(teamId);
+    _pdm_invalidatePlayerCache(newLeaderEmail, targetPlayer.playerId, `${CONTEXT}-NewLeader`);
+    clearUserRoleCache(newLeaderEmail);
+    
+    // Update team roster display
+    syncTeamPlayerData(teamId);
+    
+    Logger.log(`${CONTEXT}: Successfully set ${newLeaderEmail} as leader of team ${teamData.teamName}`);
+    
+    return createSuccessResponse({
+      teamId: teamId,
+      teamName: teamData.teamName,
+      newLeader: {
+        email: newLeaderEmail,
+        displayName: targetPlayer.displayName,
+        role: ROLES.TEAM_LEADER
+      }
+    }, `${targetPlayer.displayName} is now the leader of ${teamData.teamName}.`);
+    
   } catch (e) {
-    Logger.log(`${CONTEXT}: CRITICAL ERROR CATCH BLOCK ---- ${e.message} \nStack: ${e.stack}`);
     return handleError(e, CONTEXT);
   }
 }

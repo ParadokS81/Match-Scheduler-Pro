@@ -32,6 +32,7 @@ function createMasterSheetStructure() {
       { name: "Teams Sheet", func: () => _msm_createTeamsSheet(ss) }, 
       { name: "Players Sheet", func: () => _msm_createPlayersSheet(ss) },
       { name: "System Cache Sheet", func: () => _msm_createSystemCacheSheet(ss) }, // <-- ADD THIS STEP
+      { name: "Player Index Sheet", func: () => _msm_createPlayerIndexSheet(ss) }, // NEW STEP
       { name: "Master Sheet Properties", func: () => _msm_setupMasterSheetProperties() }
     ];
 
@@ -99,6 +100,36 @@ function _msm_createSystemCacheSheet(spreadsheet) {
     cacheSheet.getRange('G1').setValue(new Date().toISOString()).setNote("Master Timestamp for Teams List");
     
     cacheSheet.hideSheet(); 
+    
+    Logger.log(`✅ ${CONTEXT}: ${sheetName} sheet created and hidden.`);
+    return createSuccessResponse({ sheetName: sheetName });
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+function _msm_createPlayerIndexSheet(spreadsheet) {
+  const CONTEXT = "MasterSheetManager._msm_createPlayerIndexSheet";
+  try {
+    const sheetName = 'PLAYER_INDEX';
+    Logger.log(`${CONTEXT}: Creating or clearing ${sheetName} sheet...`);
+    
+    let indexSheet = spreadsheet.getSheetByName(sheetName);
+    if (indexSheet) {
+      indexSheet.clear();
+    } else {
+      indexSheet = spreadsheet.insertSheet(sheetName);
+    }
+
+    // Define headers - no GoogleEmail per privacy requirements
+    const headers = ["TeamID", "PlayerID", "PlayerDisplayName", "PlayerInitials", "PlayerRole", "PlayerDiscordUsername"];
+    indexSheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    
+    // Add timestamp for tracking
+    indexSheet.getRange('G1').setValue(new Date().toISOString()).setNote("Last Full Rebuild Timestamp");
+    
+    // Hide the sheet from normal users
+    indexSheet.hideSheet();
     
     Logger.log(`✅ ${CONTEXT}: ${sheetName} sheet created and hidden.`);
     return createSuccessResponse({ sheetName: sheetName });

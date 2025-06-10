@@ -35,6 +35,7 @@ function onOpen(e) {
       .addSeparator()
       .addItem('🔍 Verify Test Data Integrity', 'menu_verifyTestDataOnly')
       .addItem('🧹 Clean Up Test Data Only', 'menu_cleanupTestDataOnly')
+      .addItem('🔨 Rebuild Player Index', 'debug_rebuildPlayerIndex')
       .addSeparator()
       .addSubMenu(advancedTestingMenu)
       .addSeparator()
@@ -188,4 +189,37 @@ function initializeTestConfigDates() {
     TEST_CONFIG.TEST_AVAILABILITY_PAST_YEAR = pastWeekDate.getFullYear();
     TEST_CONFIG.TEST_AVAILABILITY_PAST_WEEK = getISOWeekNumber(pastWeekDate);
     Logger.log(`Test Config Dates Initialized: Current: ${TEST_CONFIG.TEST_AVAILABILITY_YEAR}-W${TEST_CONFIG.TEST_AVAILABILITY_CURRENT_WEEK}, Next: ${TEST_CONFIG.TEST_AVAILABILITY_NEXT_WEEK_YEAR}-W${TEST_CONFIG.TEST_AVAILABILITY_NEXT_WEEK}, Past: ${TEST_CONFIG.TEST_AVAILABILITY_PAST_YEAR}-W${TEST_CONFIG.TEST_AVAILABILITY_PAST_WEEK}`);
+}
+
+function debug_rebuildPlayerIndex() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert(
+    '🔨 Rebuild Player Index',
+    'This will completely rebuild the PLAYER_INDEX from current data.\n\n' +
+    'Use this if:\n' +
+    '- Setting up the index for the first time\n' +
+    '- The index appears corrupted\n' +
+    '- After major data migrations\n\n' +
+    'Continue?',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response === ui.Button.YES) {
+    ui.alert('Rebuilding...', 'Please wait while the index is rebuilt...', ui.ButtonSet.OK);
+    
+    const result = rebuildPlayerIndex();
+    
+    if (result.success) {
+      ui.alert(
+        '✅ Success',
+        `Player index rebuilt successfully!\n\n` +
+        `Players processed: ${result.data.playersProcessed}\n` +
+        `Index entries created: ${result.data.indexEntriesCreated}\n` +
+        `Teams represented: ${result.data.teamsRepresented}`,
+        ui.ButtonSet.OK
+      );
+    } else {
+      ui.alert('❌ Error', `Failed to rebuild index: ${result.message}`, ui.ButtonSet.OK);
+    }
+  }
 }

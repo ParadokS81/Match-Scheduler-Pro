@@ -28,33 +28,14 @@ function _cache_updateTeamData(teamId) {
       return false;
     }
 
-    // This is the "database join" operation
-    const allPlayersResult = getAllPlayers(true); // Get all players, including inactive
-    if (!allPlayersResult.success) {
-      Logger.log(`${CONTEXT}: Could not retrieve player data. Aborting cache update.`);
-      return false;
-    }
-
-    const roster = [];
-    for (const player of allPlayersResult.players) {
-      let playerTeamData = null;
-      if (player.team1 && player.team1.teamId === teamId) {
-        playerTeamData = player.team1;
-      } else if (player.team2 && player.team2.teamId === teamId) {
-        playerTeamData = player.team2;
-      }
-
-      if (playerTeamData) {
-        roster.push({
-          displayName: player.displayName,
-          initials: playerTeamData.initials,
-          role: playerTeamData.role,
-          googleEmail: player.googleEmail,
-          // The new Discord username field!
-          discordUsername: player.discordUsername || null
-        });
-      }
-    }
+    // === UPDATED: Use fast index lookup instead of slow full scan ===
+    const roster = getTeamRosterFromIndex(teamId).map(player => ({
+      displayName: player.displayName,
+      initials: player.initials,
+      role: player.role,
+      googleEmail: null, // Privacy: not storing email in cache
+      discordUsername: player.discordUsername
+    }));
     
     // Find the correct row in the cache sheet to update
     const teamIdsInData = cacheSheet.getRange('A2:A').getValues().flat();

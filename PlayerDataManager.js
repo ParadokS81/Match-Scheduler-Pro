@@ -329,6 +329,12 @@ function updatePlayer(googleEmail, updates, requestingUserEmail) {
                 Logger.log(`${CONTEXT}: Syncing data for team ${teamId} due to profile change.`);
                 syncTeamPlayerData(teamId); 
             });
+            
+            // === NEW: Update player index ===
+            _pdm_updatePlayerInIndex(playerToUpdateInitialState.playerId, {
+                displayName: updates.displayName,
+                discordUsername: updates.discordUsername
+            });
         }
     }
     
@@ -352,11 +358,24 @@ function deactivatePlayer(playerGoogleEmail, requestingUserEmail) {
     if (!playerToDeactivate) return createErrorResponse(`Player not found: ${playerGoogleEmail}`);
     if (!playerToDeactivate.isActive) return createSuccessResponse({ player: playerToDeactivate }, `Player ${playerGoogleEmail} is already inactive.`);
     
+    // === NEW: Track teams before deactivation ===
+    const teamsToRemoveFrom = [];
+    if (playerToDeactivate.team1.teamId) teamsToRemoveFrom.push(playerToDeactivate.team1.teamId);
+    if (playerToDeactivate.team2.teamId) teamsToRemoveFrom.push(playerToDeactivate.team2.teamId);
+    
     const isAdmin = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_PLAYERS);
     const isSelf = playerGoogleEmail.toLowerCase() === requestingUserEmail.toLowerCase();
     if (!isAdmin && !isSelf) return createErrorResponse("Permission denied to deactivate this player account.");
     const updateResult = updatePlayer(playerGoogleEmail, { isActive: false }, requestingUserEmail);
     if (!updateResult.success) return createErrorResponse(`Failed to mark player as inactive: ${updateResult.message}`);
+    
+    // === NEW: Remove from index after successful deactivation ===
+    if (updateResult.success) {
+        for (const teamId of teamsToRemoveFrom) {
+            _pdm_removeFromPlayerIndex(teamId, playerToDeactivate.playerId);
+        }
+    }
+    
     return createSuccessResponse({ player: updateResult.player }, `Player ${playerGoogleEmail} has been deactivated.`);
   } catch (e) {
     if (playerToDeactivate) _pdm_invalidatePlayerCache(playerGoogleEmail, playerToDeactivate.playerId, `${CONTEXT}-Error`);
@@ -364,7 +383,6 @@ function deactivatePlayer(playerGoogleEmail, requestingUserEmail) {
   }
 }
 
-// NEW SIMPLIFIED SIGNATURE: No longer requires 'playerNameInSlot'.
 function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
   const CONTEXT = "PlayerDataManager.joinTeamByCode";
   let player = null;
@@ -383,6 +401,14 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
     const teamData = teamValidation.teamData;
 
     Logger.log(`${CONTEXT}: Join code valid for team ${teamData.teamName} (${teamData.teamId})`);
+
+    // === NEW: Check if initials are already in use ===
+    if (areInitialsInUseOnTeam(teamData.teamId, playerInitialsInSlot)) {
+      return createErrorResponse(
+        `The initials "${playerInitialsInSlot}" are already in use by another player on team "${teamData.teamName}". ` +
+        `Please choose different initials.`
+      );
+    }
 
     player = getPlayerDataByEmail(userEmail, true);
     if (!player) {
@@ -437,6 +463,16 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
     clearUserRoleCache(userEmail);
     
     syncTeamPlayerData(teamData.teamId);
+    
+    // === NEW: Add to player index ===
+    _pdm_addToPlayerIndex(
+      teamData.teamId,
+      player.playerId,
+      player.displayName,
+      upperInitials,
+      ROLES.PLAYER,
+      player.discordUsername || ""
+    );
     
     Utilities.sleep(300);
     const updatedPlayer = _pdm_forceRefreshPlayerData(userEmail, true, `${CONTEXT}-TeamJoin`);
@@ -536,6 +572,9 @@ function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false)
     clearUserRoleCache(userEmail);
 
     syncTeamPlayerData(teamId);
+    
+    // === NEW: Remove from player index ===
+    _pdm_removeFromPlayerIndex(teamId, playerToLeave.playerId);
 
     if (teamData.isActive && playerInitialsForTeam && teamData.availabilitySheetName) {
         const clearAvailResult = removePlayerInitialsFromSchedule(teamData.availabilitySheetName, playerInitialsForTeam, true);
@@ -1080,3 +1119,467 @@ function getAllPlayers(includeInactive = false, options = {}) {
     return createSuccessResponse({ players: players, totalCount: players.length, filtersApplied: options }, `Retrieved ${players.length} players.`);
   } catch (e) { return handleError(e, CONTEXT); }
 }
+
+// ===== NEW FUNCTIONS TO ADD TO PlayerDataManager.js =====
+
+/**
+ * Rebuilds the entire PLAYER_INDEX from the Players sheet
+ * This is a maintenance function that should be called:
+ * - After major data migrations
+ * - As a recovery mechanism if index gets corrupted
+ * - Initially when setting up the index
+ * 
+ * @return {Object} Result with statistics about the rebuild
+ */
+function rebuildPlayerIndex() {
+  const CONTEXT = "PlayerDataManager.rebuildPlayerIndex";
+  try {
+    Logger.log(`${CONTEXT}: Starting complete player index rebuild...`);
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!playersSheet) {
+      return createErrorResponse("Players sheet not found");
+    }
+    
+    if (!indexSheet) {
+      return createErrorResponse("PLAYER_INDEX sheet not found. Run master sheet setup first.");
+    }
+    
+    // Clear existing index data (preserve headers)
+    if (indexSheet.getLastRow() > 1) {
+      indexSheet.getRange(2, 1, indexSheet.getLastRow() - 1, indexSheet.getLastColumn()).clear();
+    }
+    
+    // Get all player data
+    const playerData = playersSheet.getDataRange().getValues();
+    const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+    
+    // Build index entries
+    const indexEntries = [];
+    let activePlayersProcessed = 0;
+    let indexEntriesCreated = 0;
+    
+    // Skip header row
+    for (let i = 1; i < playerData.length; i++) {
+      const row = playerData[i];
+      
+      // Skip inactive players
+      if (!row[pCols.IS_ACTIVE]) continue;
+      
+      activePlayersProcessed++;
+      
+      // Process Team 1
+      if (row[pCols.TEAM1_ID]) {
+        // Verify team is active
+        const team1Data = getTeamData(row[pCols.TEAM1_ID], false); // Don't include inactive teams
+        if (team1Data) {
+          indexEntries.push([
+            row[pCols.TEAM1_ID],                    // TeamID
+            row[pCols.PLAYER_ID],                   // PlayerID
+            row[pCols.DISPLAY_NAME],                // PlayerDisplayName
+            row[pCols.TEAM1_INITIALS],              // PlayerInitials
+            row[pCols.TEAM1_ROLE],                  // PlayerRole
+            row[pCols.DISCORD_USERNAME] || ""       // PlayerDiscordUsername
+          ]);
+          indexEntriesCreated++;
+        }
+      }
+      
+      // Process Team 2
+      if (row[pCols.TEAM2_ID]) {
+        // Verify team is active
+        const team2Data = getTeamData(row[pCols.TEAM2_ID], false); // Don't include inactive teams
+        if (team2Data) {
+          indexEntries.push([
+            row[pCols.TEAM2_ID],                    // TeamID
+            row[pCols.PLAYER_ID],                   // PlayerID
+            row[pCols.DISPLAY_NAME],                // PlayerDisplayName
+            row[pCols.TEAM2_INITIALS],              // PlayerInitials
+            row[pCols.TEAM2_ROLE],                  // PlayerRole
+            row[pCols.DISCORD_USERNAME] || ""       // PlayerDiscordUsername
+          ]);
+          indexEntriesCreated++;
+        }
+      }
+    }
+    
+    // Write all entries to index in one batch operation
+    if (indexEntries.length > 0) {
+      const writeResult = withProtectionBypass(() => {
+        indexSheet.getRange(2, 1, indexEntries.length, 6).setValues(indexEntries);
+        // Update rebuild timestamp
+        indexSheet.getRange('G1').setValue(new Date().toISOString());
+        SpreadsheetApp.flush();
+        return true;
+      }, "Rebuild Player Index", 'PLAYER_INDEX');
+      
+      if (!writeResult) {
+        return createErrorResponse("Failed to write index data");
+      }
+    }
+    
+    Logger.log(`✅ ${CONTEXT}: Index rebuild complete. Players: ${activePlayersProcessed}, Entries: ${indexEntriesCreated}`);
+    
+    return createSuccessResponse({
+      playersProcessed: activePlayersProcessed,
+      indexEntriesCreated: indexEntriesCreated,
+      teamsRepresented: new Set(indexEntries.map(entry => entry[0])).size,
+      timestamp: new Date().toISOString()
+    }, `Player index rebuilt successfully: ${indexEntriesCreated} entries created`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Updates the PLAYER_INDEX when a player joins a team
+ * @param {string} teamId The team being joined
+ * @param {string} playerId The player's ID
+ * @param {string} displayName The player's display name
+ * @param {string} initials The player's initials for this team
+ * @param {string} role The player's role in the team
+ * @param {string} discordUsername The player's discord username (optional)
+ */
+function _pdm_addToPlayerIndex(teamId, playerId, displayName, initials, role, discordUsername = "") {
+  const CONTEXT = "PlayerDataManager._pdm_addToPlayerIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Warning - PLAYER_INDEX sheet not found. Skipping index update.`);
+      return;
+    }
+    
+    const newEntry = [teamId, playerId, displayName, initials, role, discordUsername];
+    
+    withProtectionBypass(() => {
+      indexSheet.appendRow(newEntry);
+      SpreadsheetApp.flush();
+    }, "Add to Player Index", 'PLAYER_INDEX');
+    
+    Logger.log(`${CONTEXT}: Added player ${displayName} (${initials}) to index for team ${teamId}`);
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error adding to index: ${e.message}`);
+    // Don't throw - index update failure shouldn't break the main operation
+  }
+}
+
+/**
+ * Removes a player from the PLAYER_INDEX when they leave a team
+ * @param {string} teamId The team being left
+ * @param {string} playerId The player's ID
+ */
+function _pdm_removeFromPlayerIndex(teamId, playerId) {
+  const CONTEXT = "PlayerDataManager._pdm_removeFromPlayerIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Warning - PLAYER_INDEX sheet not found. Skipping index update.`);
+      return;
+    }
+    
+    // Find and remove the matching row
+    const data = indexSheet.getDataRange().getValues();
+    let rowToDelete = -1;
+    
+    // Start from row 1 to skip header
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === teamId && data[i][1] === playerId) {
+        rowToDelete = i + 1; // Convert to 1-based row index
+        break;
+      }
+    }
+    
+    if (rowToDelete > 0) {
+      withProtectionBypass(() => {
+        indexSheet.deleteRow(rowToDelete);
+        SpreadsheetApp.flush();
+      }, "Remove from Player Index", 'PLAYER_INDEX');
+      
+      Logger.log(`${CONTEXT}: Removed player ${playerId} from index for team ${teamId}`);
+    }
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error removing from index: ${e.message}`);
+    // Don't throw - index update failure shouldn't break the main operation
+  }
+}
+
+/**
+ * Updates a player's information in the PLAYER_INDEX
+ * Used when display name or discord username changes
+ * @param {string} playerId The player's ID
+ * @param {Object} updates Object with displayName and/or discordUsername
+ */
+function _pdm_updatePlayerInIndex(playerId, updates) {
+  const CONTEXT = "PlayerDataManager._pdm_updatePlayerInIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Warning - PLAYER_INDEX sheet not found. Skipping index update.`);
+      return;
+    }
+    
+    const data = indexSheet.getDataRange().getValues();
+    const rowsToUpdate = [];
+    
+    // Find all rows for this player (they might be on multiple teams)
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][1] === playerId) { // Column B is PlayerID
+        rowsToUpdate.push(i + 1); // Store 1-based row index
+      }
+    }
+    
+    if (rowsToUpdate.length > 0) {
+      withProtectionBypass(() => {
+        for (const rowIndex of rowsToUpdate) {
+          if (updates.displayName) {
+            indexSheet.getRange(rowIndex, 3).setValue(updates.displayName); // Column C
+          }
+          if (updates.hasOwnProperty('discordUsername')) {
+            indexSheet.getRange(rowIndex, 6).setValue(updates.discordUsername || ""); // Column F
+          }
+        }
+        SpreadsheetApp.flush();
+      }, "Update Player in Index", 'PLAYER_INDEX');
+      
+      Logger.log(`${CONTEXT}: Updated ${rowsToUpdate.length} index entries for player ${playerId}`);
+    }
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error updating index: ${e.message}`);
+    // Don't throw - index update failure shouldn't break the main operation
+  }
+}
+
+/**
+ * Batch removes all players from a team in the PLAYER_INDEX
+ * Used when a team is archived or deleted
+ * @param {string} teamId The team ID to remove all players from
+ */
+function _pdm_removeTeamFromIndex(teamId) {
+  const CONTEXT = "PlayerDataManager._pdm_removeTeamFromIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Warning - PLAYER_INDEX sheet not found. Skipping index update.`);
+      return;
+    }
+    
+    const data = indexSheet.getDataRange().getValues();
+    const rowsToDelete = [];
+    
+    // Find all rows for this team
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === teamId) { // Column A is TeamID
+        rowsToDelete.push(i + 1); // Store 1-based row index
+      }
+    }
+    
+    if (rowsToDelete.length > 0) {
+      withProtectionBypass(() => {
+        // Delete from bottom to top to avoid index shifting
+        for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+          indexSheet.deleteRow(rowsToDelete[i]);
+        }
+        SpreadsheetApp.flush();
+      }, "Remove Team from Player Index", 'PLAYER_INDEX');
+      
+      Logger.log(`${CONTEXT}: Removed ${rowsToDelete.length} players from index for team ${teamId}`);
+    }
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error removing team from index: ${e.message}`);
+    // Don't throw - index update failure shouldn't break the main operation
+  }
+}
+
+/**
+ * Gets team roster from the PLAYER_INDEX (FAST)
+ * This replaces the slow full-sheet scan in syncTeamPlayerData and _cache_updateTeamData
+ * @param {string} teamId The team ID to get roster for
+ * @return {Array} Array of player objects with display info
+ */
+function getTeamRosterFromIndex(teamId) {
+  const CONTEXT = "PlayerDataManager.getTeamRosterFromIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: PLAYER_INDEX not found, falling back to slow method`);
+      return getTeamRosterSlow(teamId); // Fallback to original method
+    }
+    
+    const data = indexSheet.getDataRange().getValues();
+    const roster = [];
+    
+    // Skip header row
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === teamId) { // TeamID match
+        roster.push({
+          playerId: data[i][1],
+          displayName: data[i][2],
+          initials: data[i][3],
+          role: data[i][4],
+          discordUsername: data[i][5] || null,
+          // Note: googleEmail is not in the index for privacy
+        });
+      }
+    }
+    
+    // Sort by display name for consistent ordering
+    roster.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+    
+    Logger.log(`${CONTEXT}: Retrieved ${roster.length} players for team ${teamId} from index`);
+    return roster;
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error reading from index: ${e.message}`);
+    return getTeamRosterSlow(teamId); // Fallback
+  }
+}
+
+/**
+ * Fallback method - the original slow roster lookup
+ * Keep this for backward compatibility and error recovery
+ */
+function getTeamRosterSlow(teamId) {
+  const CONTEXT = "PlayerDataManager.getTeamRosterSlow";
+  const allPlayersResult = getAllPlayers(false, { teamId: teamId });
+  if (!allPlayersResult.success) {
+    Logger.log(`${CONTEXT}: Could not retrieve players for team ${teamId}`);
+    return [];
+  }
+  
+  return allPlayersResult.players.map(player => {
+    const teamData = player.team1.teamId === teamId ? player.team1 : player.team2;
+    return {
+      playerId: player.playerId,
+      displayName: player.displayName,
+      initials: teamData.initials,
+      role: teamData.role,
+      googleEmail: player.googleEmail,
+      discordUsername: player.discordUsername || null
+    };
+  });
+}
+
+/**
+ * Checks if initials are already in use by another player on the specified team
+ * Uses the fast PLAYER_INDEX for lookup
+ * @param {string} teamId The team to check
+ * @param {string} initials The initials to check
+ * @param {string} excludePlayerId Optional player ID to exclude (for updates)
+ * @return {boolean} True if initials are already taken
+ */
+function areInitialsInUseOnTeam(teamId, initials, excludePlayerId = null) {
+  const CONTEXT = "PlayerDataManager.areInitialsInUseOnTeam";
+  try {
+    const upperInitials = initials.toUpperCase();
+    
+    // Try fast lookup first
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName('PLAYER_INDEX');
+    
+    if (indexSheet) {
+      // Use index for fast lookup
+      const data = indexSheet.getDataRange().getValues();
+      
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === teamId && // Same team
+            data[i][3] === upperInitials && // Same initials
+            data[i][1] !== excludePlayerId) { // Not the excluded player
+          Logger.log(`${CONTEXT}: Initials ${upperInitials} already in use on team ${teamId}`);
+          return true;
+        }
+      }
+      return false;
+    }
+    
+    // Fallback to slow method if index not available
+    Logger.log(`${CONTEXT}: Index not available, using slow lookup`);
+    const roster = getTeamRosterSlow(teamId);
+    
+    for (const player of roster) {
+      if (player.initials === upperInitials && player.playerId !== excludePlayerId) {
+        Logger.log(`${CONTEXT}: Initials ${upperInitials} already in use on team ${teamId} (slow check)`);
+        return true;
+      }
+    }
+    
+    return false;
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error checking initials: ${e.message}`);
+    return false; // Fail open to avoid blocking operations
+  }
+}
+
+// ===== UPDATES TO EXISTING FUNCTIONS =====
+
+// In joinTeamByCode(), add after line: syncTeamPlayerData(teamData.teamId);
+/*
+_pdm_addToPlayerIndex(
+  teamData.teamId,
+  player.playerId,
+  player.displayName,
+  upperInitials,
+  ROLES.PLAYER,
+  player.discordUsername || ""
+);
+*/
+
+// Also add initials validation BEFORE joining:
+/*
+if (areInitialsInUseOnTeam(teamData.teamId, playerInitialsInSlot)) {
+  return createErrorResponse(
+    `The initials "${playerInitialsInSlot}" are already in use by another player on team "${teamData.teamName}". ` +
+    `Please choose different initials.`
+  );
+}
+*/
+
+// In leaveTeam(), add after line: syncTeamPlayerData(teamId);
+/*
+_pdm_removeFromPlayerIndex(teamId, playerToLeave.playerId);
+*/
+
+// In updatePlayer(), add after the teams sync loop:
+/*
+if (nameWasChanged || discordWasChanged) {
+    // ... existing sync code ...
+    
+    _pdm_updatePlayerInIndex(playerToUpdateInitialState.playerId, {
+        displayName: updates.displayName,
+        discordUsername: updates.discordUsername
+    });
+}
+*/
+
+// In deactivatePlayer(), add this logic:
+/*
+// Before the updatePlayer call, save the teams
+const teamsToRemoveFrom = [];
+if (playerToDeactivate.team1.teamId) teamsToRemoveFrom.push(playerToDeactivate.team1.teamId);
+if (playerToDeactivate.team2.teamId) teamsToRemoveFrom.push(playerToDeactivate.team2.teamId);
+
+// After successful deactivation
+if (updateResult.success) {
+    for (const teamId of teamsToRemoveFrom) {
+        _pdm_removeFromPlayerIndex(teamId, playerToDeactivate.playerId);
+    }
+}
+*/

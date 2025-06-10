@@ -381,6 +381,9 @@ function archiveTeam(teamId, requestingUserEmail) {
       const disassociateResult = disassociatePlayersFromTeam(teamId, "Team Archived");
       if (!disassociateResult.success) Logger.log(`${CONTEXT}: Player disassociation warning: ${disassociateResult.message}`);
       
+      // === NEW: Remove team from player index ===
+      _pdm_removeTeamFromIndex(teamId);
+      
       // === START: ADDED CACHE LOGIC ===
       const cacheSheet = ss.getSheetByName('SYSTEM_CACHE');
       if (cacheSheet) {
@@ -430,6 +433,9 @@ function hardDeleteArchivedTeam(teamId, requestingUserEmail) {
     if (teamRowIndexInArray === -1) return createErrorResponse(`Team ${teamId} not found in sheet for hard delete.`);
     const teamRowSheetIndex = teamRowIndexInArray + 1;
     const availabilitySheetName = teamData.availabilitySheetName;
+
+    // === NEW: Remove from index before deletion ===
+    _pdm_removeTeamFromIndex(teamId);
 
     let sheetActuallyDeleted = false;
     if (availabilitySheetName) {
