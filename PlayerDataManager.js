@@ -255,20 +255,20 @@ function getPlayerDataById(playerId, includeInactive = false) {
 function updatePlayer(googleEmail, updates, requestingUserEmail) {
   const CONTEXT = "PlayerDataManager.updatePlayer";
   try {
+    // PHASE 1: Fast path for discord-only updates
+    if (updates.discordUsername && !updates.displayName && Object.keys(updates).length === 1) {
+      return updateDiscordUsernameOnly(googleEmail, updates.discordUsername, requestingUserEmail);
+    }
+    
+    // Original logic for all other updates
     const playerToUpdateInitialState = getPlayerDataByEmail(googleEmail, true);
     if (!playerToUpdateInitialState) return createErrorResponse(`Player not found: ${googleEmail}`);
 
     const isAdmin = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_PLAYERS);
     const isSelf = googleEmail.toLowerCase() === requestingUserEmail.toLowerCase();
     
-    // A user can update their own profile. An admin can only deactivate a profile via this function.
     if (!isSelf && !isAdmin) {
         return createErrorResponse("Permission denied to update this player's profile.");
-    }
-    
-    // We only process 'displayName' and 'discordUsername' if it's a self-update.
-    if (isSelf) {
-      // Basic validation can be added here if needed, e.g., for discord username format
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -291,7 +291,6 @@ function updatePlayer(googleEmail, updates, requestingUserEmail) {
           updatedFieldsCount++;
       }
       
-      // Add logic to handle discordUsername update
       if (isSelf && updates.hasOwnProperty('discordUsername')) {
           playersSheet.getRange(rowIndexToUpdate, pCols.DISCORD_USERNAME + 1).setValue(updates.discordUsername.trim());
           discordWasChanged = true;
@@ -317,25 +316,28 @@ function updatePlayer(googleEmail, updates, requestingUserEmail) {
     
     _pdm_invalidatePlayerCache(googleEmail, playerToUpdateInitialState.playerId, `${CONTEXT}-Update`);
     
-    // If name OR discord handle changed, we need to sync the teams the player is on.
-    if (nameWasChanged || discordWasChanged) {
-        Logger.log(`${CONTEXT}: Profile changed for ${googleEmail}. Propagating changes to teams...`);
+    // If name changed, sync teams (PHASE 2: using batch sync)
+    if (nameWasChanged) {
+        Logger.log(`${CONTEXT}: Display name changed for ${googleEmail}. Propagating changes to teams...`);
         const teamsToSync = [];
         if (playerToUpdateInitialState.team1.teamId) teamsToSync.push(playerToUpdateInitialState.team1.teamId);
         if (playerToUpdateInitialState.team2.teamId) teamsToSync.push(playerToUpdateInitialState.team2.teamId);
         
         if (teamsToSync.length > 0) {
-            teamsToSync.forEach(teamId => {
-                Logger.log(`${CONTEXT}: Syncing data for team ${teamId} due to profile change.`);
-                syncTeamPlayerData(teamId); 
-            });
-            
-            // === NEW: Update player index ===
-            _pdm_updatePlayerInIndex(playerToUpdateInitialState.playerId, {
-                displayName: updates.displayName,
-                discordUsername: updates.discordUsername
-            });
+            // PHASE 2: Use batch sync instead of individual syncs
+            const syncResult = syncMultipleTeamsPlayerData(teamsToSync);
+            if (!syncResult.success) {
+                Logger.log(`${CONTEXT}: Warning - Team sync failed: ${syncResult.message}`);
+            }
         }
+    }
+    
+    // Always update index if name or discord changed
+    if (nameWasChanged || discordWasChanged) {
+        _pdm_updatePlayerInIndex(playerToUpdateInitialState.playerId, {
+            displayName: updates.displayName,
+            discordUsername: updates.discordUsername
+        });
     }
     
     Utilities.sleep(200);
@@ -1583,3 +1585,192 @@ if (updateResult.success) {
     }
 }
 */
+
+/**
+ * Fast path for updating only discord username
+ * Skips team sync since teams don't use discord usernames
+ * @param {string} googleEmail - Player's email
+ * @param {string} discordUsername - New discord username
+ * @param {string} requestingUserEmail - User making the request
+ * @return {Object} Success/error response
+ */
+function updateDiscordUsernameOnly(googleEmail, discordUsername, requestingUserEmail) {
+  const CONTEXT = "PlayerDataManager.updateDiscordUsernameOnly";
+  try {
+    // Permission check - must be self
+    if (googleEmail.toLowerCase() !== requestingUserEmail.toLowerCase()) {
+      return createErrorResponse("You can only update your own Discord username.");
+    }
+    
+    // Get current player data
+    const player = getPlayerDataByEmail(googleEmail, true);
+    if (!player) {
+      return createErrorResponse(`Player not found: ${googleEmail}`);
+    }
+    
+    if (!player.isActive) {
+      return createErrorResponse("Cannot update inactive player profile.");
+    }
+    
+    // Find player row
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    if (!playersSheet) return createErrorResponse("Players sheet not found.");
+    
+    const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+    const playerRowData = findRow(playersSheet, pCols.GOOGLE_EMAIL, googleEmail.toLowerCase());
+    if (playerRowData.rowIndex === -1) return createErrorResponse(`Player ${googleEmail} row not found.`);
+    
+    const rowIndexToUpdate = playerRowData.rowIndex + 1;
+    
+    // Update only discord username and last seen
+    const updateResult = withProtectionBypass(() => {
+      playersSheet.getRange(rowIndexToUpdate, pCols.DISCORD_USERNAME + 1).setValue(discordUsername.trim());
+      playersSheet.getRange(rowIndexToUpdate, pCols.LAST_SEEN + 1).setValue(getCurrentTimestamp());
+      SpreadsheetApp.flush();
+      return true;
+    }, "Update Discord Username Only", BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    
+    if (!updateResult) {
+      return createErrorResponse("Failed to update Discord username.");
+    }
+    
+    // Update player index (fast operation)
+    _pdm_updatePlayerInIndex(player.playerId, {
+      discordUsername: discordUsername.trim()
+    });
+    
+    // Clear cache and return updated data
+    _pdm_invalidatePlayerCache(googleEmail, player.playerId, `${CONTEXT}-DiscordUpdate`);
+    
+    // Return success with updated data
+    const updatedPlayer = {
+      ...player,
+      discordUsername: discordUsername.trim(),
+      lastSeen: getCurrentTimestamp()
+    };
+    
+    return createSuccessResponse({ player: updatedPlayer }, "Discord username updated successfully.");
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// ===== PHASE 2: Batch team sync operations =====
+
+/**
+ * Syncs player data for multiple teams in a single operation
+ * More efficient than calling syncTeamPlayerData multiple times
+ * @param {Array<string>} teamIds - Array of team IDs to sync
+ * @return {Object} Success/error response with sync results
+ */
+function syncMultipleTeamsPlayerData(teamIds) {
+  const CONTEXT = "PlayerDataManager.syncMultipleTeamsPlayerData";
+  try {
+    if (!teamIds || !Array.isArray(teamIds) || teamIds.length === 0) {
+      return createErrorResponse("No team IDs provided for sync.");
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+    
+    if (!playersSheet || !teamsSheet) {
+      return createErrorResponse("Players or Teams sheet not found for sync.");
+    }
+    
+    // Get all player data ONCE
+    const playersData = playersSheet.getDataRange().getValues();
+    const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
+    
+    // Build roster data for each team
+    const teamRosterMap = new Map();
+    
+    // Initialize empty rosters for each team
+    teamIds.forEach(teamId => {
+      teamRosterMap.set(teamId, {
+        playerNames: [],
+        playerInitials: []
+      });
+    });
+    
+    // Single pass through all players
+    for (let i = 1; i < playersData.length; i++) {
+      const row = playersData[i];
+      if (!row[pCols.IS_ACTIVE]) continue;
+      
+      // Check if player is on any of our teams
+      const checkTeamMembership = (teamIdFromRow, initialsFromRow) => {
+        if (teamIdFromRow && teamIds.includes(teamIdFromRow) && initialsFromRow) {
+          const roster = teamRosterMap.get(teamIdFromRow);
+          roster.playerNames.push(row[pCols.DISPLAY_NAME]);
+          roster.playerInitials.push(initialsFromRow);
+        }
+      };
+      
+      checkTeamMembership(row[pCols.TEAM1_ID], row[pCols.TEAM1_INITIALS]);
+      checkTeamMembership(row[pCols.TEAM2_ID], row[pCols.TEAM2_INITIALS]);
+    }
+    
+    // Get teams data and prepare batch updates
+    const teamsData = teamsSheet.getDataRange().getValues();
+    const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
+    const currentTimestamp = getCurrentTimestamp();
+    const updateOperations = [];
+    
+    // Find all teams and prepare their updates
+    teamIds.forEach(teamId => {
+      const teamRowIndex = teamsData.slice(1).findIndex(row => row[tCols.TEAM_ID] === teamId);
+      if (teamRowIndex !== -1) {
+        const roster = teamRosterMap.get(teamId);
+        const sheetRowIndex = teamRowIndex + 2; // +1 for 0-index, +1 for header
+        
+        updateOperations.push({
+          teamId: teamId,
+          rowIndex: sheetRowIndex,
+          playerCount: roster.playerNames.length,
+          playerList: roster.playerNames.join(','),
+          initialsList: roster.playerInitials.join(',')
+        });
+      }
+    });
+    
+    // Perform all updates in a single protected operation
+    const batchUpdateResult = withProtectionBypass(() => {
+      updateOperations.forEach(op => {
+        teamsSheet.getRange(op.rowIndex, tCols.PLAYER_COUNT + 1).setValue(op.playerCount);
+        teamsSheet.getRange(op.rowIndex, tCols.PLAYER_LIST + 1).setValue(op.playerList);
+        teamsSheet.getRange(op.rowIndex, tCols.INITIALS_LIST + 1).setValue(op.initialsList);
+        teamsSheet.getRange(op.rowIndex, tCols.LAST_ACTIVE + 1).setValue(currentTimestamp);
+      });
+      SpreadsheetApp.flush();
+      return true;
+    }, "Batch Sync Team Player Data", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+    
+    if (!batchUpdateResult) {
+      return createErrorResponse("Failed to sync team player data.");
+    }
+    
+    // Invalidate caches and update SYSTEM_CACHE for all teams
+    const cacheUpdateResults = [];
+    updateOperations.forEach(op => {
+      _pdm_invalidateTeamDataCache(op.teamId, `${CONTEXT}-BatchSync`);
+      // Update SYSTEM_CACHE
+      const cacheResult = _cache_updateTeamData(op.teamId);
+      cacheUpdateResults.push({
+        teamId: op.teamId,
+        success: cacheResult && cacheResult.success
+      });
+    });
+    
+    return createSuccessResponse({
+      teamsUpdated: updateOperations.length,
+      operations: updateOperations,
+      cacheUpdates: cacheUpdateResults
+    }, `Synced data for ${updateOperations.length} teams.`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}

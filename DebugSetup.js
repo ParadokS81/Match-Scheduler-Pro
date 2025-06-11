@@ -223,7 +223,7 @@ function resetStep3_populateTestData() {
         Logger.log("=== PHASE 3.5: Rebuilding PLAYER_INDEX ===");
         const indexRebuildResult = rebuildPlayerIndex();
         if (indexRebuildResult.success) {
-            Logger.log(`✅ Player index rebuilt: ${indexRebuildResult.data.indexEntriesCreated} entries created`);
+            Logger.log(`✅ Player index rebuilt: ${indexRebuildResult.indexEntriesCreated} entries created`);
         } else {
             Logger.log(`⚠️ Warning: Player index rebuild failed: ${indexRebuildResult.message}`);
             // Don't fail the entire reset for this - the index can be rebuilt manually later

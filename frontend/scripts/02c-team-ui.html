@@ -431,53 +431,84 @@
     }
 
     function handleProfileUpdateSubmit(event) {
-        event.preventDefault();
-        const form = event.target;
-        const saveButton = document.getElementById('save-profile-btn');
-        const originalButtonText = saveButton.innerHTML;
-        saveButton.innerHTML = 'Saving...';
-        saveButton.disabled = true;
-
-        const profileData = {
-            displayName: form.displayName.value,
-            discordUsername: form.discordUsername.value
-        };
-
-        google.script.run
-            .withSuccessHandler(function(response) {
-                const messageDiv = document.getElementById('profile-form-message');
-                if (response.success) {
-                    messageDiv.className = 'mt-4 text-xs text-green-400';
-                    messageDiv.textContent = 'Profile updated successfully!';
-                    
-                    // Update local context and UI immediately
-                    if (userContext && response.player) {
-                        userContext.displayName = response.player.displayName;
-                        userContext.discordUsername = response.player.discordUsername;
-                        populateUserPanel(userContext);
-                    }
-
-                    setTimeout(() => {
-                        document.getElementById('profile-editor-modal').classList.add('hidden');
-                        messageDiv.textContent = ''; // Clear message on close
-                    }, 1000);
-
-                } else {
-                    messageDiv.className = 'mt-4 text-xs text-red-400';
-                    messageDiv.textContent = `Error: ${response.message}`;
-                }
-                saveButton.innerHTML = originalButtonText;
-                saveButton.disabled = false;
-            })
-            .withFailureHandler(function(error) {
-                const messageDiv = document.getElementById('profile-form-message');
-                messageDiv.className = 'mt-4 text-xs text-red-400';
-                messageDiv.textContent = `Error: ${error.message}`;
-                saveButton.innerHTML = originalButtonText;
-                saveButton.disabled = false;
-            })
-            .updateMyProfile(profileData);
-    }
+  event.preventDefault();
+  const form = event.target;
+  const saveButton = document.getElementById('save-profile-btn');
+  const originalButtonText = saveButton.innerHTML;
+  
+  // Get the new values
+  const newDisplayName = form.displayName.value;
+  const newDiscordUsername = form.discordUsername.value;
+  
+  // Store old values for potential rollback
+  const oldDisplayName = userContext.displayName;
+  const oldDiscordUsername = userContext.discordUsername || '';
+  
+  // 1. Optimistically update the UI immediately
+  updateGlobalProfileUI(newDisplayName, newDiscordUsername);
+  
+  // 2. Close modal and show updating state
+  document.getElementById('profile-editor-modal').classList.add('hidden');
+  setProfileEditState('updating');
+  
+  // 3. Prepare the update data
+  const profileData = {
+    displayName: newDisplayName,
+    discordUsername: newDiscordUsername
+  };
+  
+  // 4. Send to backend
+  google.script.run
+    .withSuccessHandler(function(response) {
+      if (response.success) {
+        // Success - just re-enable the edit button
+        setProfileEditState('ready');
+        
+        // Optional: Show a success toast/notification
+        // showNotification('Profile updated successfully!', 'success');
+        
+        // No need to update UI again - we already did it optimistically
+      } else {
+        // Error - revert the optimistic update
+        updateGlobalProfileUI(oldDisplayName, oldDiscordUsername);
+        setProfileEditState('error');
+        
+        // Show error message (you might want to create a toast notification for this)
+        alert(`Profile update failed: ${response.message}`);
+        
+        // Re-open the modal with error message
+        const profileModal = document.getElementById('profile-editor-modal');
+        if (profileModal) {
+          profileModal.classList.remove('hidden');
+          const messageDiv = document.getElementById('profile-form-message');
+          messageDiv.className = 'mt-4 text-xs text-red-400';
+          messageDiv.textContent = `Error: ${response.message}`;
+          saveButton.innerHTML = originalButtonText;
+          saveButton.disabled = false;
+        }
+      }
+    })
+    .withFailureHandler(function(error) {
+      // Network/script error - revert everything
+      updateGlobalProfileUI(oldDisplayName, oldDiscordUsername);
+      setProfileEditState('error');
+      
+      // Show error
+      alert(`Profile update failed: ${error.message || 'Unknown error'}`);
+      
+      // Re-open modal with error
+      const profileModal = document.getElementById('profile-editor-modal');
+      if (profileModal) {
+        profileModal.classList.remove('hidden');
+        const messageDiv = document.getElementById('profile-form-message');
+        messageDiv.className = 'mt-4 text-xs text-red-400';
+        messageDiv.textContent = `Error: ${error.message || 'Unknown error'}`;
+        saveButton.innerHTML = originalButtonText;
+        saveButton.disabled = false;
+      }
+    })
+    .updateMyProfile(profileData);
+}
 
     function handleCreateTeamSubmit(event) {
         event.preventDefault();
@@ -709,5 +740,124 @@
     if (profileForm) {
         profileForm.addEventListener('submit', handleProfileUpdateSubmit);
     }
+
+/**
+ * Updates all UI elements that display the user's global profile information
+ * @param {string} displayName - The new display name
+ * @param {string} discordUsername - The new discord username
+ */
+function updateGlobalProfileUI(displayName, discordUsername) {
+  // 1. Update the left panel user display
+  const leftPanelUserDisplay = document.getElementById('left-panel-user-display-name');
+  if (leftPanelUserDisplay) {
+    leftPanelUserDisplay.textContent = displayName;
+  }
+  
+  // 2. Update the roster display for all teams the user is on
+  if (userContext && userContext.teams) {
+    userContext.teams.forEach(team => {
+      // Update the roster data in userContext
+      if (team.roster) {
+        team.roster.forEach(player => {
+          if (player.displayName === userContext.displayName) {
+            player.displayName = displayName;
+          }
+        });
+      }
+    });
+    
+    // If we're currently viewing a team, update the roster display
+    const rosterArea = document.getElementById('left-panel-team-roster-area');
+    if (rosterArea && currentActiveTeamId) {
+      const activeTeam = userContext.teams.find(t => t.teamId === currentActiveTeamId);
+      if (activeTeam && activeTeam.roster) {
+        // Re-render the roster
+        rosterArea.innerHTML = '';
+        activeTeam.roster.forEach(player => {
+          const playerDiv = document.createElement('div');
+          playerDiv.className = 'flex justify-between items-center py-0.5';
+          playerDiv.innerHTML = `
+            <span class="text-slate-200">${player.displayName}</span>
+            <span class="text-sky-400 font-mono">${player.initials || '--'}</span>`;
+          rosterArea.appendChild(playerDiv);
+        });
+      }
+    }
+  }
+  
+  // 3. Update the profile modal inputs in case it's reopened
+  const profileForm = document.getElementById('profile-editor-form');
+  if (profileForm) {
+    if (profileForm.displayName) profileForm.displayName.value = displayName;
+    if (profileForm.discordUsername) profileForm.discordUsername.value = discordUsername || '';
+  }
+  
+  // 4. Update userContext for consistency
+  if (userContext) {
+    const oldDisplayName = userContext.displayName;
+    userContext.displayName = displayName;
+    userContext.discordUsername = discordUsername;
+    
+    // Also update the display name in any cached team rosters
+    if (window.allTeamsList) {
+      window.allTeamsList.forEach(team => {
+        if (team.leaderName === oldDisplayName) {
+          team.leaderName = displayName;
+        }
+      });
+    }
+  }
+}
+
+/**
+ * Sets the profile editing state (ready, updating, error)
+ * @param {string} state - 'ready', 'updating', or 'error'
+ */
+function setProfileEditState(state) {
+  const editLink = document.getElementById('edit-profile-link');
+  if (!editLink) return;
+  
+  switch(state) {
+    case 'updating':
+      editLink.classList.add('opacity-50', 'cursor-not-allowed');
+      editLink.classList.remove('hover:text-sky-300');
+      editLink.textContent = 'Updating Profile...';
+      editLink.onclick = (e) => e.preventDefault(); // Disable click
+      break;
+    
+    case 'ready':
+      editLink.classList.remove('opacity-50', 'cursor-not-allowed');
+      editLink.classList.add('hover:text-sky-300');
+      editLink.textContent = 'Edit My Global Profile';
+      // Re-enable the modal open functionality
+      editLink.onclick = (e) => {
+        e.preventDefault();
+        const profileModal = document.getElementById('profile-editor-modal');
+        if (profileModal && userContext) {
+          // Populate form with current user data
+          const profileForm = document.getElementById('profile-editor-form');
+          profileForm.displayName.value = userContext.displayName || '';
+          profileForm.discordUsername.value = userContext.discordUsername || '';
+          document.getElementById('profile-form-message').textContent = '';
+          
+          // Set discord help image
+          const helpImage = document.getElementById('discord-info-image');
+          if (helpImage && window.BLOCK_CONFIG_CLIENT && window.BLOCK_CONFIG_CLIENT.WEB_APP.DISCORD_HELP_IMAGE_URL) {
+            helpImage.src = window.BLOCK_CONFIG_CLIENT.WEB_APP.DISCORD_HELP_IMAGE_URL;
+          }
+          
+          profileModal.classList.remove('hidden');
+        }
+      };
+      break;
+      
+    case 'error':
+      editLink.classList.remove('opacity-50', 'cursor-not-allowed');
+      editLink.classList.add('hover:text-sky-300');
+      editLink.textContent = 'Edit My Global Profile';
+      // Re-enable click but keep error state visible
+      break;
+  }
+}
 
   </script>

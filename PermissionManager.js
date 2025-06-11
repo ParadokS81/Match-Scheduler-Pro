@@ -290,6 +290,7 @@ function getUserUIContext(userEmail) {
     const role = getUserRole(userEmail); 
     const teams = getUserTeams(userEmail);
     const displayName = getUserDisplayName(userEmail);
+    const playerData = getPlayerDataByEmail(userEmail);
     
     // === START: ADDED FAVORITES LOGIC ===
     let favorites = [];
@@ -317,6 +318,7 @@ function getUserUIContext(userEmail) {
       isAuthenticated: role !== ROLES.GUEST,
       userEmail: userEmail,
       displayName: displayName,
+      discordUsername: playerData ? playerData.discordUsername : null,
       role: role,
       teams: teams || [], 
       favorites: favorites, // <-- ADDED
