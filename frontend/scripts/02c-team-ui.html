@@ -400,6 +400,12 @@
         } else {
             teamManagementSection.style.display = 'none';
         }
+
+        // === NEW: Initialize timestamp tracking for this team ===
+        if (!teamTimestamps.has(teamId)) {
+            teamTimestamps.set(teamId, new Date().getTime());
+        }
+
         loadTeamSchedule(teamId); 
     }
     
@@ -598,6 +604,10 @@
             
             // Initialize Browse All Teams
             initializeBrowseAllTeams();
+
+            // === NEW: Start smart systems ===
+            warmFavoriteTeamsCache();
+            startUpdatePolling();
         }
     }
 
@@ -860,4 +870,33 @@ function setProfileEditState(state) {
   }
 }
 
-  </script>
+/**
+ * Pre-warms cache for user's favorite teams to improve performance on first load.
+ */
+function warmFavoriteTeamsCache() {
+    if (warmingInProgress || favoritesWarmed) return;
+
+    const favorites = userContext.favorites || [];
+    if (favorites.length === 0) {
+        favoritesWarmed = true; // Mark as done if no favorites exist
+        return;
+    }
+
+    warmingInProgress = true;
+    console.log('[Delta Sync] Warming cache for', favorites.length, 'favorite teams');
+
+    google.script.run
+        .withSuccessHandler(function(response) {
+            if (response.success) {
+                console.log('[Delta Sync] Cache warmed for', response.warmedCount, 'teams');
+                favoritesWarmed = true;
+            }
+            warmingInProgress = false;
+        })
+        .withFailureHandler(function(error) {
+            console.error('[Delta Sync] Cache warming failed:', error);
+            warmingInProgress = false;
+        })
+        .warmFavoriteTeamsCache(favorites);
+}
+</script>

@@ -117,5 +117,38 @@
         background-color: #0369a1 !important; /* sky-700 */
         color: #e0f2fe !important; /* sky-100 */
     }
+
+    /* === NEW: Delta sync visual feedback === */
+
+    /* Cell update animation */
+    .cell-updating {
+        animation: cellPulse 0.5s ease-in-out;
+    }
+
+    @keyframes cellPulse {
+        0%   { background-color: rgba(59, 130, 246, 0.3); }
+        50%  { background-color: rgba(59, 130, 246, 0.5); transform: scale(1.02); }
+        100% { background-color: inherit; }
+    }
+
+    /* Change notification popup */
+    .delta-notification {
+        position: fixed;
+        top: 20px;
+        right: -400px; /* Start off-screen */
+        background-color: #10B981; /* Tailwind green-500 */
+        color: white;
+        padding: 12px 20px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+        z-index: 10000;
+    }
+
+    .delta-notification.show {
+        right: 20px; /* Slide in */
+    }
   </style>
 </head>

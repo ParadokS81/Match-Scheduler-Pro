@@ -1,5 +1,6 @@
 /**
  * Schedule Manager - Availability Manager (Web App Edition - Phase 1D)
+ * @version 1.4.0 (2025-06-12) - Added delta sync cache functions for real-time change tracking
  * @version 1.3.1 (2025-06-02) - Corrected all inter-file function calls to be direct global calls.
  * @version 1.3.0 (2025-05-31) - Added cache invalidation for readWeekBlockData.
  * @version 1.2.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
@@ -126,54 +127,57 @@ function availabilityManager_updatePlayerAvailability_SERVICE(userEmail, teamId,
 }
 
 function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(userEmail, teamId, action, weeklyPayloads) {
-    const CONTEXT = "AvailabilityManager.updatePlayerAvailabilityForMultipleWeeks_SERVICE_BATCHED"; // Note new context name
-        try {
+    const CONTEXT = "AvailabilityManager.updatePlayerAvailabilityForMultipleWeeks_SERVICE_BATCHED";
+    try {
         // 1. Initial Authorizations and User/Team Data Setup (remains the same)
-        const authResult = authorizeAvailabilityUpdate(userEmail, teamId); //
+        const authResult = authorizeAvailabilityUpdate(userEmail, teamId);
         if (!authResult.hasPermission) {
-            return createErrorResponse(authResult.reason, { permissionDenied: true }); //
+            return createErrorResponse(authResult.reason, { permissionDenied: true });
         }
-        const userTeams = getUserTeams(userEmail); //
+        const userTeams = getUserTeams(userEmail);
         const teamMembership = userTeams.find(team => team.teamId === teamId);
         if (!teamMembership) {
-            return createErrorResponse("You are not currently listed as a member of this team."); //
+            return createErrorResponse("You are not currently listed as a member of this team.");
         }
         const userInitials = teamMembership.initials;
-        if (!userInitials || !isValidInitials(userInitials)) { //
-             return createErrorResponse("Invalid or missing initials for this team. Please set them in your player profile for this team."); //
+        if (!userInitials || !isValidInitials(userInitials)) {
+             return createErrorResponse("Invalid or missing initials for this team. Please set them in your player profile for this team.");
         }
         const ss = SpreadsheetApp.getActiveSpreadsheet();
-        const teamDataObject = getTeamData(teamId); //
+        const teamDataObject = getTeamData(teamId);
         if (!teamDataObject || !teamDataObject.availabilitySheetName) {
-            return createErrorResponse("Team data or availability sheet name not found."); //
+            return createErrorResponse("Team data or availability sheet name not found.");
         }
         const teamSheet = ss.getSheetByName(teamDataObject.availabilitySheetName);
         if (!teamSheet) {
-            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`); //
+            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
         }
 
         let overallCellsModifiedCount = 0;
         let overallInvalidCellsCount = 0;
         const overallModifiedSheetCellReferences = [];
 
+        // === NEW: Track cell changes for delta sync ===
+        const cellChanges = [];
+
         // Wrap the entire multi-week processing in a single withProtectionBypass
-        const batchUpdateResult = withProtectionBypass(() => { //
+        const batchUpdateResult = withProtectionBypass(() => {
             let anyModificationInAnyWeek = false;
 
             for (const weeklyData of weeklyPayloads) {
                 const { year, weekNumber, selections } = weeklyData;
                 if (!selections || selections.length === 0) continue;
 
-                const weekBlock = findWeekBlock(teamSheet, year, weekNumber); //
+                const weekBlock = findWeekBlock(teamSheet, year, weekNumber);
                 if (!weekBlock) {
                     Logger.log(`${CONTEXT}: Week block ${year}-W${weekNumber} not found. Skipping ${selections.length} selections.`);
                     overallInvalidCellsCount += selections.length;
                     continue;
                 }
 
-                const blockStartSheetRow = weekBlock.startRow; //
-                const daysStartSheetCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1; //
-                const numTimeSlotsInBlock = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length; //
+                const blockStartSheetRow = weekBlock.startRow;
+                const daysStartSheetCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1;
+                const numTimeSlotsInBlock = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
                 const numDaysInBlock = 7;
 
                 let minVisualRow = selections[0].visualRow;
@@ -216,26 +220,49 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
 
                         if (action === "add") {
                             if (!tempNewInitialsArray.includes(ucUserInitials)) {
-                                tempNewInitialsArray.push(ucUserInitials); tempNewInitialsArray.sort(); modifiedThisCell = true;
+                                tempNewInitialsArray.push(ucUserInitials);
+                                tempNewInitialsArray.sort();
+                                modifiedThisCell = true;
                             }
                         } else if (action === "remove") {
                             const initialIndex = tempNewInitialsArray.indexOf(ucUserInitials);
                             if (initialIndex > -1) {
-                                tempNewInitialsArray.splice(initialIndex, 1); modifiedThisCell = true;
+                                tempNewInitialsArray.splice(initialIndex, 1);
+                                modifiedThisCell = true;
                             }
                         }
+
                         if (modifiedThisCell) {
-                            newValues[arrayRow][arrayCol] = tempNewInitialsArray.join(", ");
+                            const newCellValue = tempNewInitialsArray.join(", ");
+                            newValues[arrayRow][arrayCol] = newCellValue;
                             cellsModifiedThisWeek++;
+                            
+                            const sheetRow = blockStartSheetRow + sel.visualRow;
+                            const sheetCol = daysStartSheetCol + sel.visualCol;
+                            
                             overallModifiedSheetCellReferences.push({
-                                row: blockStartSheetRow + sel.visualRow, col: daysStartSheetCol + sel.visualCol
+                                row: sheetRow,
+                                col: sheetCol
+                            });
+                            
+                            // === NEW: Track this cell change ===
+                            cellChanges.push({
+                                year: year,
+                                week: weekNumber,
+                                row: sheetRow,
+                                col: sheetCol,
+                                visualRow: sel.visualRow,  // Relative to grid
+                                visualCol: sel.visualCol,   // Relative to grid
+                                oldValue: currentText,
+                                newValue: newCellValue,
+                                action: action,
+                                initials: ucUserInitials
                             });
                         }
-                    } else {
-                        if (sel.visualRow < 0 || sel.visualRow >= numTimeSlotsInBlock || sel.visualCol < 0 || sel.visualCol >= numDaysInBlock) {
-                            Logger.log(`${CONTEXT}: Sel (${sel.visualRow},${sel.visualCol}) for ${year}-W${weekNumber} out of block bounds.`);
-                            invalidCellsThisWeek++;
-                        }
+                    }
+                    if (sel.visualRow < 0 || sel.visualRow >= numTimeSlotsInBlock || sel.visualCol < 0 || sel.visualCol >= numDaysInBlock) {
+                        Logger.log(`${CONTEXT}: Sel (${sel.visualRow},${sel.visualCol}) for ${year}-W${weekNumber} out of block bounds.`);
+                        invalidCellsThisWeek++;
                     }
                 }
                 if (cellsModifiedThisWeek > 0) {
@@ -245,37 +272,63 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
                 overallCellsModifiedCount += cellsModifiedThisWeek;
                 overallInvalidCellsCount += invalidCellsThisWeek;
                 if (cellsModifiedThisWeek > 0) {
-                    _am_invalidateScheduleCacheForBlock(teamSheet.getName(), year, weekNumber); //
+                    _am_invalidateScheduleCacheForBlock(teamSheet.getName(), year, weekNumber);
                 }
             } // End loop weeklyPayloads
             return anyModificationInAnyWeek; // Return if any sheet writes actually happened
         }, "Batch Update Multiple Weeks Availability", teamDataObject.availabilitySheetName);
 
-
         if (!batchUpdateResult && overallCellsModifiedCount > 0) {
-            // This means withProtectionBypass failed, or the inner logic returned false when it shouldn't have.
-            // If overallCellsModifiedCount > 0, it means we *intended* to write but batchUpdateResult is false.
             Logger.log(`${CONTEXT}: Overall batch update failed or reported no changes despite modifications tallied. Review protection bypass logs.`);
-            // Don't return error yet, let it try to build a response if some cells were tallied as modified.
-            // This path might be tricky to hit if withProtectionBypass throws on failure.
         }
 
         if (overallCellsModifiedCount > 0) {
-            if (BLOCK_CONFIG.SETTINGS.APPLY_SHEET_COLOR_CODING === true) { //
-                applyAvailabilityColors(teamSheet, overallModifiedSheetCellReferences); //
+            if (BLOCK_CONFIG.SETTINGS.APPLY_SHEET_COLOR_CODING === true) {
+                applyAvailabilityColors(teamSheet, overallModifiedSheetCellReferences);
             }
-            updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); //
+            updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+            
+            // === NEW: Delta sync tracking ===
+            const cellChanges = [];
+            for (const cellRef of overallModifiedSheetCellReferences) {
+                let newValue = '';
+                try {
+                    newValue = teamSheet.getRange(cellRef.row, cellRef.col).getDisplayValue();
+                } catch (e) {
+                    Logger.log(`${CONTEXT}: Error getting cell value at ${cellRef.row},${cellRef.col}: ${e.message}`);
+                    continue;
+                }
+                
+                const change = {
+                    year: weeklyPayloads.find(w => w.selections.some(s => 
+                        blockStartSheetRow + s.visualRow === cellRef.row))?.year || new Date().getFullYear(),
+                    week: weeklyPayloads.find(w => w.selections.some(s => 
+                        blockStartSheetRow + s.visualRow === cellRef.row))?.weekNumber || getISOWeekNumber(new Date()),
+                    visualRow: cellRef.row - blockStartSheetRow,
+                    visualCol: cellRef.col - daysStartSheetCol,
+                    newValue: newValue
+                };
+                cellChanges.push(change);
+            }
+            
+            if (cellChanges.length > 0) {
+                _cache_trackCellChanges(teamId, teamSheet.getName(), cellChanges);
+            }
+            _cache_setTeamMetadata(teamId, BLOCK_CONFIG.CHANGE_TYPES.AVAILABILITY, userEmail, {
+                cellsModified: overallCellsModifiedCount,
+                action: action
+            });
         }
 
-        return createSuccessResponse({ //
+        return createSuccessResponse({
             cellsModified: overallCellsModifiedCount,
             invalidCells: overallInvalidCellsCount,
             userInitials: userInitials,
             action: action
-        }, generateUpdateMessage(action, overallCellsModifiedCount, overallInvalidCellsCount, userInitials)); //
+        }, generateUpdateMessage(action, overallCellsModifiedCount, overallInvalidCellsCount, userInitials));
 
     } catch (e) {
-        return handleError(e, CONTEXT); //
+        return handleError(e, CONTEXT);
     }
 }
 
@@ -891,4 +944,166 @@ function _am_invalidateScheduleCacheForBlock(sheetName, year, weekNumber) {
     } catch (e) {
         Logger.log(`Error in ${CONTEXT} for ${sheetName} ${year}-W${weekNumber}: ${e.message}`);
     }
+}
+
+// =============================================================================
+// DELTA SYNC CACHE FUNCTIONS
+// =============================================================================
+
+/**
+ * Gets or creates team metadata for delta tracking (SMART UPSERT)
+ * This function updates lastActive, increments version, and tracks change types
+ * @param {string} teamId - The team ID
+ * @param {string} changeType - Type of change (from BLOCK_CONFIG.CHANGE_TYPES)
+ * @param {string} updatedBy - Email of user making the change
+ * @param {Object} changeDetails - Optional details about the change
+ * @return {Object} Team metadata object
+ */
+function _cache_setTeamMetadata(teamId, changeType, updatedBy, changeDetails = {}) {
+  const CONTEXT = "AvailabilityManager._cache_setTeamMetadata";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) {
+      Logger.log(`${CONTEXT}: Cache service not available`);
+      return null;
+    }
+    
+    const metadataKey = `teamMetadata_${teamId}`;
+    
+    // Get existing metadata or create new
+    let metadata = null;
+    const cachedData = cache.get(metadataKey);
+    if (cachedData) {
+      try {
+        metadata = JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse cached metadata, creating new`);
+      }
+    }
+    
+    if (!metadata) {
+      metadata = {
+        teamId: teamId,
+        version: 0,
+        lastActive: 0,
+        lastUpdateType: BLOCK_CONFIG.CHANGE_TYPES.UNKNOWN,
+        lastUpdatedBy: null,
+        changeDetails: {},
+        created: new Date().getTime()
+      };
+    }
+    
+    // Update metadata
+    const now = new Date().getTime();
+    metadata.version = (metadata.version || 0) + 1;
+    metadata.lastActive = now;
+    metadata.lastUpdateType = changeType;
+    metadata.lastUpdatedBy = updatedBy;
+    metadata.changeDetails = changeDetails;
+    metadata.updated = now;
+    
+    // Cache with default duration
+    cache.put(metadataKey, JSON.stringify(metadata), BLOCK_CONFIG.CACHE.DEFAULT_DURATION_SECONDS);
+    
+    Logger.log(`${CONTEXT}: Updated metadata for team ${teamId}, version ${metadata.version}, type: ${changeType}`);
+    return metadata;
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error updating team metadata: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Gets team metadata for delta tracking (SIMPLE GETTER)
+ * @param {string} teamId - The team ID
+ * @return {Object|null} Team metadata object or null if not found
+ */
+function _cache_getTeamMetadata(teamId) {
+  const CONTEXT = "AvailabilityManager._cache_getTeamMetadata";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return null;
+    
+    const metadataKey = `teamMetadata_${teamId}`;
+    const cachedData = cache.get(metadataKey);
+    
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse metadata for team ${teamId}`);
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error getting team metadata: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Tracks cell changes for delta sync (CALLED FROM UPDATE FUNCTIONS)
+ * This stores detailed cell change information with short expiration
+ * @param {string} teamId - The team ID
+ * @param {string} sheetName - The sheet name
+ * @param {Array} cellChanges - Array of change objects
+ */
+function _cache_trackCellChanges(teamId, sheetName, cellChanges) {
+  const CONTEXT = "AvailabilityManager._cache_trackCellChanges";
+  try {
+    if (!cellChanges || cellChanges.length === 0) return;
+    
+    const cache = CacheService.getScriptCache();
+    if (!cache) return;
+    
+    const changesKey = `cellChanges_${teamId}_${sheetName}`;
+    const changesData = {
+      teamId: teamId,
+      sheetName: sheetName,
+      changes: cellChanges,
+      timestamp: new Date().getTime(),
+      cellsModified: cellChanges.length
+    };
+    
+    // Store with short expiration (5 minutes)
+    cache.put(changesKey, JSON.stringify(changesData), BLOCK_CONFIG.CACHE.CELL_CHANGES_DURATION);
+    
+    Logger.log(`${CONTEXT}: Tracked ${cellChanges.length} cell changes for ${teamId}`);
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error tracking cell changes: ${e.message}`);
+  }
+}
+
+/**
+ * Gets cell changes for delta sync (SIMPLE WRAPPER)
+ * @param {string} teamId - The team ID  
+ * @param {string} sheetName - The sheet name
+ * @return {Object|null} Cell changes data or null if not found
+ */
+function _cache_getCellChanges(teamId, sheetName) {
+  const CONTEXT = "AvailabilityManager._cache_getCellChanges";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return null;
+    
+    const changesKey = `cellChanges_${teamId}_${sheetName}`;
+    const cachedData = cache.get(changesKey);
+    
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse cell changes`);
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error getting cell changes: ${e.message}`);
+    return null;
+  }
 }

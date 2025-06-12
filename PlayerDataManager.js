@@ -22,7 +22,7 @@
 // Assumes global functions from Configuration.js: createErrorResponse, createSuccessResponse, handleError, isValidEmail, getCurrentTimestamp, formatDate
 // Assumes global functions from CellProtection.js: withProtectionBypass
 // Assumes global functions from PermissionManager.js: userHasPermission, clearUserRoleCache
-// Assumes global functions from TeamDataManager.js: getTeamData, validateJoinCode, isUserTeamLeader, _invalidateTeamCache
+// Assumes global functions from TeamDataManager.js: getTeamData, validateJoinCode, isUserTeamLeader, _invalidateTeamCache, getTeamDataByJoinCode
 // Assumes global functions from AvailabilityManager.js: removePlayerInitialsFromSchedule
 // Assumes global functions from WeekBlockManager.js: findWeekBlock, ensureWeekExists
 
@@ -360,7 +360,7 @@ function deactivatePlayer(playerGoogleEmail, requestingUserEmail) {
     if (!playerToDeactivate) return createErrorResponse(`Player not found: ${playerGoogleEmail}`);
     if (!playerToDeactivate.isActive) return createSuccessResponse({ player: playerToDeactivate }, `Player ${playerGoogleEmail} is already inactive.`);
     
-    // === NEW: Track teams before deactivation ===
+    // === Track teams before deactivation ===
     const teamsToRemoveFrom = [];
     if (playerToDeactivate.team1.teamId) teamsToRemoveFrom.push(playerToDeactivate.team1.teamId);
     if (playerToDeactivate.team2.teamId) teamsToRemoveFrom.push(playerToDeactivate.team2.teamId);
@@ -371,7 +371,7 @@ function deactivatePlayer(playerGoogleEmail, requestingUserEmail) {
     const updateResult = updatePlayer(playerGoogleEmail, { isActive: false }, requestingUserEmail);
     if (!updateResult.success) return createErrorResponse(`Failed to mark player as inactive: ${updateResult.message}`);
     
-    // === NEW: Remove from index after successful deactivation ===
+    // === Remove from index after successful deactivation ===
     if (updateResult.success) {
         for (const teamId of teamsToRemoveFrom) {
             _pdm_removeFromPlayerIndex(teamId, playerToDeactivate.playerId);
@@ -396,51 +396,59 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
     const initialPlayerObject = getPlayerDataByEmail(userEmail, true) || {};
     const displayNameForValidation = initialPlayerObject.displayName || userEmail.split('@')[0];
     if (!validatePlayerDisplayName(displayNameForValidation).isValid) return createErrorResponse(`Invalid player name on record: ${displayNameForValidation}`);
-    if (!validatePlayerInitials(playerInitialsInSlot).isValid) return createErrorResponse(`Invalid initials: ${validatePlayerInitials(playerInitialsInSlot).errors.join(', ')}`);
-
-    const teamValidation = validateJoinCode(joinCode);
-    if (!teamValidation.isValid) return createErrorResponse(teamValidation.message || "Invalid join code.");
-    const teamData = teamValidation.teamData;
-
-    Logger.log(`${CONTEXT}: Join code valid for team ${teamData.teamName} (${teamData.teamId})`);
-
-    // === NEW: Check if initials are already in use ===
+    if (!validatePlayerInitials(playerInitialsInSlot).isValid) return createErrorResponse(`Invalid initials: ${playerInitialsInSlot}`);
+    
+    // Get team data from join code
+    const teamData = getTeamDataByJoinCode(joinCode);
+    if (!teamData) return createErrorResponse("Invalid join code.");
+    if (!teamData.isActive) return createErrorResponse("This team is no longer active.");
+    
+    // === HANDOVER TASK: Add cache configuration constants (Phase 1A)
+    // Check if initials are already in use
     if (areInitialsInUseOnTeam(teamData.teamId, playerInitialsInSlot)) {
       return createErrorResponse(
         `The initials "${playerInitialsInSlot}" are already in use by another player on team "${teamData.teamName}". ` +
         `Please choose different initials.`
       );
     }
-
+    
+    // Get or create player record
     player = getPlayerDataByEmail(userEmail, true);
     if (!player) {
-      Logger.log(`${CONTEXT}: Player ${userEmail} not found, creating new player with a default name.`);
-      // When creating a player for the first time, use their email prefix as a temporary display name.
-      const createPlayerResult = createPlayer({ googleEmail: userEmail, displayName: userEmail.split('@')[0] });
-      if (!createPlayerResult.success) return createErrorResponse(`Failed to create profile: ${createPlayerResult.message}`);
-      
-      player = _pdm_forceRefreshPlayerData(userEmail, true, `${CONTEXT}-AfterCreate`);
-      if (!player) {
-        return createErrorResponse("Failed to retrieve new player record after creation.");
-      }
-      Logger.log(`${CONTEXT}: New player created and retrieved successfully`);
-    } else if (!player.isActive) {
-      return createErrorResponse(`Your account is inactive. Please contact an admin to reactivate it.`);
+      const createResult = createPlayer({
+        googleEmail: userEmail,
+        displayName: displayNameForValidation
+      });
+      if (!createResult.success) return createErrorResponse(`Failed to create player record: ${createResult.message}`);
+      player = createResult.player;
     }
-
-    if ((player.team1.teamId === teamData.teamId) || (player.team2.teamId === teamData.teamId)) return createErrorResponse(`Already member of "${teamData.teamName}".`);
+    
+    if (!player.isActive) return createErrorResponse("Your player account is not active. Please contact an administrator.");
+    
+    // Check if player is already on this team
+    if (player.team1.teamId === teamData.teamId || player.team2.teamId === teamData.teamId) {
+      return createErrorResponse(`You are already on team "${teamData.teamName}".`);
+    }
+    
+    // Find available team slot
     let targetSlotKey = null;
-    if (!player.team1.teamId) targetSlotKey = 'TEAM1';
-    else if (BLOCK_CONFIG.TEAM_SETTINGS.MAX_TEAMS_PER_PLAYER > 1 && !player.team2.teamId) targetSlotKey = 'TEAM2';
-    if (!targetSlotKey) return createErrorResponse(`Already in max ${BLOCK_CONFIG.TEAM_SETTINGS.MAX_TEAMS_PER_PLAYER} teams.`);
-
-    Logger.log(`${CONTEXT}: Adding ${userEmail} to team ${teamData.teamId} in slot ${targetSlotKey}`);
-
+    if (!player.team1.teamId) {
+      targetSlotKey = "TEAM1";
+    } else if (!player.team2.teamId) {
+      targetSlotKey = "TEAM2";
+    } else {
+      return createErrorResponse("You are already on two teams. You must leave one before joining another.");
+    }
+    
+    // Get players sheet
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    if (!playersSheet) return createErrorResponse("Players database not found.");
+    
+    // Find player row
     const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
     const playerRowData = findRow(playersSheet, pCols.PLAYER_ID, player.playerId);
-    if (playerRowData.rowIndex === -1) return createErrorResponse("Player record consistency error.");
+    if (playerRowData.rowIndex === -1) return createErrorResponse("Player record error during join.");
     
     const rowIndexToUpdate = playerRowData.rowIndex + 1;
     const upperInitials = playerInitialsInSlot.toUpperCase();
@@ -466,7 +474,7 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
     
     syncTeamPlayerData(teamData.teamId);
     
-    // === NEW: Add to player index ===
+    // === ADD to player index ===
     _pdm_addToPlayerIndex(
       teamData.teamId,
       player.playerId,
@@ -484,9 +492,8 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
     }
     
     _pdm_updateCurrentWeekRosterBlockOnTeamSheet(teamData.teamId, "JOINED", { displayName: updatedPlayer.displayName, initials: upperInitials, email: userEmail });
-
-    Logger.log(`${CONTEXT}: Team join completed successfully for ${userEmail}`);
-    return createSuccessResponse({ player: updatedPlayer, teamJoined: teamData }, `Joined "${teamData.teamName}" as ${upperInitials}!`);
+    
+    return createSuccessResponse({ player: updatedPlayer }, `Successfully joined team "${teamData.teamName}".`);
   } catch (e) {
     if (player) _pdm_invalidatePlayerCache(userEmail, player.playerId, `${CONTEXT}-Error`);
     return handleError(e, CONTEXT);
@@ -497,59 +504,55 @@ function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false)
   const CONTEXT = "PlayerDataManager.leaveTeam";
   let playerToLeave = null;
   try {
+    Logger.log(`${CONTEXT}: ${userEmail} attempting to leave team ${teamId}`);
+    
+    if (!internalCall && !userHasPermission(userEmail, PERMISSIONS.LEAVE_TEAM)) {
+      return createErrorResponse("Permission denied to leave team.");
+    }
+    
     playerToLeave = getPlayerDataByEmail(userEmail, true);
-    if (!playerToLeave) return createErrorResponse(`Player ${userEmail} not found.`);
-
-    const isLeaderOfThisTeam = isUserTeamLeader(userEmail, teamId);
-    if (!internalCall) {
-        const isAdmin = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_PLAYERS);
-        const isSelf = userEmail.toLowerCase() === requestingUserEmail.toLowerCase();
-        const isLeaderRemovingAnotherPlayer = isUserTeamLeader(requestingUserEmail, teamId) && userHasPermission(requestingUserEmail, PERMISSIONS.REMOVE_PLAYER_FROM_OWN_TEAM, teamId) && !isSelf;
-        if (isSelf && isLeaderOfThisTeam) {
-            return createErrorResponse("Team leaders cannot leave their team. Please hand over leadership first, or an Admin can archive the team.");
-        }
-        const canLeave = userHasPermission(requestingUserEmail, PERMISSIONS.LEAVE_TEAM, teamId);
-        if (!isAdmin && !(isSelf && canLeave) && !isLeaderRemovingAnotherPlayer) {
-            return createErrorResponse("Permission denied to remove player from team.");
-        }
-        if (!playerToLeave.isActive && !isAdmin && !isLeaderRemovingAnotherPlayer && !isSelf) {
-             return createErrorResponse(`Inactive player ${userEmail} cannot be processed unless by Admin/Leader or self (if permitted).`);
-        }
+    if (!playerToLeave) return createErrorResponse(`Player not found: ${userEmail}`);
+    if (!playerToLeave.isActive) return createErrorResponse("Cannot leave team - player account is inactive.");
+    
+    const isAdmin = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_PLAYERS);
+    const isSelf = userEmail.toLowerCase() === requestingUserEmail.toLowerCase();
+    const isTeamLeader = isUserTeamLeader(requestingUserEmail, teamId);
+    
+    if (!isSelf && !isAdmin && !isTeamLeader) {
+      return createErrorResponse("Permission denied to remove this player from team.");
     }
-
-    let teamSlotKey = null, playerInitialsForTeam = null, playerNameForTeam = null;
-    if (playerToLeave.team1.teamId === teamId) { 
-        teamSlotKey = 'TEAM1'; 
-        playerInitialsForTeam = playerToLeave.team1.initials;
-        playerNameForTeam = playerToLeave.team1.teamName;
-    } else if (playerToLeave.team2.teamId === teamId) { 
-        teamSlotKey = 'TEAM2'; 
-        playerInitialsForTeam = playerToLeave.team2.initials;
-        playerNameForTeam = playerToLeave.team2.teamName;
+    
+    // Find which slot has this team
+    let teamSlotKey = null;
+    if (playerToLeave.team1.teamId === teamId) {
+      teamSlotKey = "TEAM1";
+    } else if (playerToLeave.team2.teamId === teamId) {
+      teamSlotKey = "TEAM2";
     }
-    if (!teamSlotKey) return createErrorResponse(`${userEmail} not on team ${teamId}.`);
-
-    const teamData = getTeamData(teamId, true);
-    if (!teamData) return createErrorResponse(`Team ${teamId} not found.`);
-
-    if (isLeaderOfThisTeam && (internalCall || userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_PLAYERS))) {
-        const leaderUpdateBypass = withProtectionBypass(() => {
-            const teamsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-            const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
-            const teamRowDataInTeamsSheet = findRow(teamsSheet, tCols.TEAM_ID, teamId);
-            if (teamRowDataInTeamsSheet.rowIndex !== -1) {
-                teamsSheet.getRange(teamRowDataInTeamsSheet.rowIndex + 1, tCols.LEADER_EMAIL + 1).setValue("");
-                teamsSheet.getRange(teamRowDataInTeamsSheet.rowIndex + 1, tCols.LAST_ACTIVE + 1).setValue(getCurrentTimestamp());
-                SpreadsheetApp.flush(); // FIXED: Ensure write completes
-                return true;
-            } return false;
-        }, "Clear Team Leader Email if Leader Leaves/Removed", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-        if (!leaderUpdateBypass) return createErrorResponse(`Failed to update leader status for team ${teamId}.`);
-        _pdm_invalidateTeamDataCache(teamId, `${CONTEXT}-LeaderLeave`);
+    
+    if (!teamSlotKey) {
+      return createErrorResponse(`Player ${userEmail} is not on team ${teamId}.`);
     }
-
+    
+    // Get team data for validation
+    const teamData = getTeamData(teamId);
+    if (!teamData) {
+      return createErrorResponse("Team not found.");
+    }
+    
+    // If player is team leader, check if they're the last leader
+    if (playerToLeave[teamSlotKey.toLowerCase()].role === ROLES.TEAM_LEADER) {
+      const otherLeaders = getTeamLeaders(teamId).filter(leader => leader.playerId !== playerToLeave.playerId);
+      if (otherLeaders.length === 0) {
+        return createErrorResponse("Cannot leave team - you are the last team leader. Please assign a new leader first.");
+      }
+    }
+    
+    // Get players sheet
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const playersSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.PLAYERS_SHEET);
+    if (!playersSheet) return createErrorResponse("Players database not found.");
+    
     const pCols = BLOCK_CONFIG.MASTER_SHEET.PLAYERS_COLUMNS;
     const playerRowData = findRow(playersSheet, pCols.PLAYER_ID, playerToLeave.playerId);
     if (playerRowData.rowIndex === -1) return createErrorResponse("Player record error during leave team.");
@@ -575,27 +578,22 @@ function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false)
 
     syncTeamPlayerData(teamId);
     
-    // === NEW: Remove from player index ===
+    // === Remove from player index ===
     _pdm_removeFromPlayerIndex(teamId, playerToLeave.playerId);
-
-    if (teamData.isActive && playerInitialsForTeam && teamData.availabilitySheetName) {
-        const clearAvailResult = removePlayerInitialsFromSchedule(teamData.availabilitySheetName, playerInitialsForTeam, true);
-        if (!clearAvailResult.success) Logger.log(`${CONTEXT}: WARNING - Failed to clear availability: ${clearAvailResult.message}`);
-    }
-
-    // NEW: Update current week roster block on team sheet
-    const changedPlayerDetails = { 
-        displayName: playerNameForTeam || playerToLeave.displayName,
-        initials: playerInitialsForTeam, 
-        email: userEmail 
-    };
-    _pdm_updateCurrentWeekRosterBlockOnTeamSheet(teamId, "LEFT", changedPlayerDetails);
-
-    // FIXED: Add delay and force refresh
-    Utilities.sleep(200);
+    
+    // Remove player's initials from schedule
+    removePlayerInitialsFromSchedule(teamId, playerToLeave[teamSlotKey.toLowerCase()].initials);
+    
+    Utilities.sleep(300);
     const updatedPlayer = _pdm_forceRefreshPlayerData(userEmail, true, `${CONTEXT}-TeamLeave`);
-
-    return createSuccessResponse({ player: updatedPlayer || playerToLeave, teamLeftId: teamId }, `Successfully removed from "${teamData.teamName}".`);
+    
+    if (!updatedPlayer) {
+      return createErrorResponse("Team leave completed but failed to retrieve updated data. Please refresh.");
+    }
+    
+    _pdm_updateCurrentWeekRosterBlockOnTeamSheet(teamId, "LEFT", { displayName: playerToLeave.displayName, initials: playerToLeave[teamSlotKey.toLowerCase()].initials, email: userEmail });
+    
+    return createSuccessResponse({ player: updatedPlayer }, `Successfully left team "${teamData.teamName}".`);
   } catch (e) {
     if (playerToLeave) _pdm_invalidatePlayerCache(userEmail, playerToLeave.playerId, `${CONTEXT}-Error`);
     return handleError(e, CONTEXT);

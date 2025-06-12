@@ -454,4 +454,132 @@
             modal.classList.add('hidden');
         }
     }
-  </script>
+
+    // === NEW: DELTA SYNC AND POLLING SYSTEM ===
+
+    /**
+     * Starts the update polling system.
+     */
+    function startUpdatePolling() {
+        if (isPollingActive) return;
+        isPollingActive = true;
+        pollBackoff = MIN_POLL_INTERVAL;
+        console.log('[Delta Sync] Starting update polling.');
+        setTimeout(pollForUpdates, 5000); // Initial poll after 5s
+    }
+
+    /**
+     * Stops the update polling system.
+     */
+    function stopUpdatePolling() {
+        if (!isPollingActive) return;
+        isPollingActive = false;
+        if (pollInterval) clearTimeout(pollInterval);
+        pollInterval = null;
+        console.log('[Delta Sync] Stopped update polling.');
+    }
+
+    /**
+     * Main polling function that calls the backend to check for changes.
+     */
+    function pollForUpdates() {
+        if (!isPollingActive || !currentActiveTeamId) return;
+        
+        const lastTimestamp = teamTimestamps.get(currentActiveTeamId) || 0;
+        google.script.run
+            .withSuccessHandler(handleScheduleUpdate)
+            .withFailureHandler(handlePollError)
+            .checkForScheduleUpdates(currentActiveTeamId, lastTimestamp);
+    }
+
+    /**
+     * Schedules the next poll with the current backoff delay.
+     */
+    function scheduleNextPoll() {
+        if (!isPollingActive) return;
+        if (pollInterval) clearTimeout(pollInterval);
+        pollInterval = setTimeout(pollForUpdates, pollBackoff);
+    }
+
+    /**
+     * Handles errors during polling by increasing the poll interval (exponential backoff).
+     */
+    function handlePollError(error) {
+        console.error('[Delta Sync] Poll error:', error);
+        pollBackoff = Math.min(pollBackoff * 2, MAX_POLL_INTERVAL); // Double delay up to max
+        console.log('[Delta Sync] Backing off to', pollBackoff / 1000, 'seconds.');
+        scheduleNextPoll();
+    }
+
+    /**
+     * Main handler for the delta API response. Routes changes to the correct UI functions.
+     */
+    function handleScheduleUpdate(response) {
+        if (!response || !response.success || !response.hasChanges) {
+            scheduleNextPoll(); // No changes, continue polling normally
+            return;
+        }
+        
+        console.log('[Delta Sync] Changes detected:', response.changeType);
+        if (response.serverTimestamp) teamTimestamps.set(currentActiveTeamId, response.serverTimestamp);
+
+        if (response.isOwnChange && response.changeType === 'availability') {
+            scheduleNextPoll(); // Skip refresh for our own availability changes
+            return;
+        }
+
+        // Apply changes based on type
+        switch (response.changeType) {
+            case 'availability':
+                if (response.changes) applyAvailabilityChanges(response.changes);
+                showChangeNotification('Schedule updated by ' + getShortName(response.changedBy));
+                break;
+            case 'roster':
+            case 'team_settings':
+            case 'player_profile':
+                showChangeNotification(formatChangeMessage(response.changeType, response, response.changedBy));
+                setTimeout(() => { if (currentActiveTeamId) loadTeamSchedule(currentActiveTeamId, true); }, 1000);
+                break;
+            default:
+                console.warn('[Delta Sync] Unknown change type:', response.changeType);
+                break;
+        }
+
+        pollBackoff = MIN_POLL_INTERVAL; // Reset backoff after a successful update
+        scheduleNextPoll();
+    }
+
+    /**
+     * Displays a short notification message to the user.
+     */
+    function showChangeNotification(message) {
+        let notificationEl = document.getElementById('delta-notification');
+        if (!notificationEl) {
+            notificationEl = document.createElement('div');
+            notificationEl.id = 'delta-notification';
+            notificationEl.className = 'delta-notification';
+            document.body.appendChild(notificationEl);
+        }
+        notificationEl.textContent = message;
+        notificationEl.classList.add('show');
+        setTimeout(() => { notificationEl.classList.remove('show'); }, 3000);
+    }
+
+    // Helper to get a short name from an email for notifications
+    function getShortName(email) {
+        if (!email || typeof email !== 'string') return 'Someone';
+        const namePart = email.split('@')[0];
+        return namePart.charAt(0).toUpperCase() + namePart.slice(1).split(/[._-]/)[0];
+    }
+
+    // Event listeners to pause polling when the tab is not active
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopUpdatePolling();
+        } else {
+            if (currentActiveTeamId) startUpdatePolling();
+        }
+    });
+
+    window.addEventListener('beforeunload', stopUpdatePolling);
+</script>
