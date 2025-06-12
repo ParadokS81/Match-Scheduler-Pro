@@ -1,6 +1,7 @@
 <!--
  * Schedule Manager - Frontend Head Content
  *
+ * @version 2.0.0 (2025-06-12) - Added CSS for static layout
  * @version 1.1.0 (2025-06-07) - Updated to numbered filename for proper sorting order.
  * @version 1.0.0 (2025-06-07) - Extracted from monolithic index.html for better organization.
  *
@@ -117,38 +118,75 @@
         background-color: #0369a1 !important; /* sky-700 */
         color: #e0f2fe !important; /* sky-100 */
     }
+    
+    /* Static Layout Styles */
+:root {
+  --week1-height: 300px; /* Default height, will be set dynamically */
+  --week2-height: 300px; /* Default height, will be set dynamically */
+}
 
-    /* === NEW: Delta sync visual feedback === */
+/* Fix spacing and alignment */
+#main-content-area-grids {
+  padding-top: 0;
+  padding-bottom: 0;
+}
 
-    /* Cell update animation */
-    .cell-updating {
-        animation: cellPulse 0.5s ease-in-out;
-    }
+/* Space between the grids */
+#main-content-area-grids .space-y-5 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1.25rem;
+}
 
-    @keyframes cellPulse {
-        0%   { background-color: rgba(59, 130, 246, 0.3); }
-        50%  { background-color: rgba(59, 130, 246, 0.5); transform: scale(1.02); }
-        100% { background-color: inherit; }
-    }
+/* Header spacing */
+header.mb-1 {
+  margin-bottom: 0.25rem;
+}
 
-    /* Change notification popup */
-    .delta-notification {
-        position: fixed;
-        top: 20px;
-        right: -400px; /* Start off-screen */
-        background-color: #10B981; /* Tailwind green-500 */
-        color: white;
-        padding: 12px 20px;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
-        z-index: 10000;
-    }
+/* Right panel spacing */
+#control-panel .space-y-5 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1.25rem;
+}
 
-    .delta-notification.show {
-        right: 20px; /* Slide in */
-    }
+/* Week navigation bar bottom margin */
+#week-navigation-bar.mb-3 {
+  margin-bottom: 0.75rem;
+}
+
+/* Ensure consistent padding on top of panels */
+#left-control-panel, #control-panel {
+  padding-top: 0;
+}
+
+/* Favorites panel styling */
+#favorite-opponents-list {
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+/* Browse teams panel styling */
+#browse-all-teams-list {
+  overflow-y: auto;
+}
+
+/* Empty favorite slots */
+.team-card.empty-slot {
+  background-color: rgba(51, 65, 85, 0.1);
+  border: 1px dashed rgba(100, 116, 139, 0.2);
+  margin-bottom: 0.25rem;
+}
+
+/* Team card margin consistency */
+.team-card {
+  margin-bottom: 0.25rem;
+}
+
+/* Panel headers */
+.panel-header {
+  background-color: rgba(51, 65, 85, 0.5);
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.5);
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: rgb(226, 232, 240);
+}
   </style>
 </head>

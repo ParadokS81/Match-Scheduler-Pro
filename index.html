@@ -1,23 +1,20 @@
 <!DOCTYPE html>
 <html>
-<?!= include('frontend/01-head-content') ?>
+<?!= include('frontend2/01-head-content') ?>
 <body class="bg-slate-900 text-slate-300">
-  <?!= include('frontend/02-body-structure') ?>
-  <?!= include('frontend/03-modals') ?>
+
+  <div id="main-app-container" class="h-screen flex flex-col">
+
+    <header class="text-center w-full max-w-screen-2xl mx-auto px-2 sm:px-4 py-5 flex-shrink-0">
+      <h1 class="text-4xl sm:text-5xl font-bold text-sky-400 flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-check-2 mr-3 text-sky-500"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="m16 20 2 2 4-4"/></svg>
+        Schedule Manager
+      </h1>
+    </header>
+
+    <?!= include('frontend2/02-body-structure') ?>
+
+  </div>
   
-  <script>
-    // Server variables injected by template - MUST BE IN MAIN FILE
-    window.userContextFromServer = <?!= typeof userContextFromServer !== 'undefined' ? JSON.stringify(userContextFromServer) : 'null' ?>;
-    window.BLOCK_CONFIG_CLIENT = <?!= typeof BLOCK_CONFIG !== 'undefined' ? JSON.stringify(BLOCK_CONFIG) : 'null' ?>;
-    window.ROLES_CLIENT = <?!= typeof ROLES !== 'undefined' ? JSON.stringify(ROLES) : 'null' ?>;
-  </script>
-  
-  <?!= include('frontend/scripts/01-init') ?>
-  <?!= include('frontend/scripts/02a-cache-navigation') ?>
-  <?!= include('frontend/scripts/02b-grid-selection') ?>
-  <?!= include('frontend/scripts/02c-team-ui') ?>
-  <?!= include('frontend/scripts/02d-schedule-availability') ?>
-  <?!= include('frontend/scripts/03-templates') ?>
-  <?!= include('frontend/scripts/04-events') ?>
-</body>
+  </body>
 </html>
