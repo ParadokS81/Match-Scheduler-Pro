@@ -143,6 +143,13 @@ function joinTeamWithCode(joinCode, initials) {
     return result;
 }
 
+function kickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+    const activeUser = getActiveUser(); // Global from PermissionManager.js
+    if (!activeUser) {
+        return createErrorResponse("Authentication required."); // Global from Configuration.js
+    }
+    return api_kickPlayerAndRegenerateCode(teamId, playerToKickEmail); // DIRECT CALL to global function from WebAppAPI.js
+}
 
 // --- Availability ---
 function getTeamSchedule(teamId, year, weekNumber) { return apiGetTeamSchedule(teamId, year, weekNumber); } // DIRECT CALL to global function from WebAppAPI.js

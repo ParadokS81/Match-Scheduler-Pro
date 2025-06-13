@@ -327,7 +327,47 @@ function leaveTeamById(teamId) { // This is the API function name from original 
   }
 }
 
-// In WebAppAPI.js (add this new function)
+/**
+ * Kicks a player and regenerates the team join code in a single atomic action.
+ * @param {string} teamId The ID of the team.
+ * @param {string} playerToKickEmail The email of the player to be removed.
+ * @return {Object} A success response containing the new join code, or an error response.
+ */
+function kickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+  const CONTEXT = "WebAppAPI.kickPlayerAndRegenerateCode";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) {
+      return createErrorResponse("Authentication required.");
+    }
+    const leaderEmail = activeUser.getEmail();
+
+    // Step 1: Kick the player. This function already contains all necessary permission checks.
+    const kickResult = kickPlayerFromTeam(teamId, playerToKickEmail, leaderEmail);
+
+    if (!kickResult.success) {
+      // If the kick fails for any reason (e.g., permissions, player not on team), stop and return the error.
+      return kickResult;
+    }
+
+    // Step 2: If the kick was successful, immediately regenerate the join code.
+    const regenResult = regenerateJoinCode(teamId, leaderEmail);
+
+    if (!regenResult.success) {
+      // This is an edge case, but we should handle it. The player was kicked, but the code wasn't regenerated.
+      Logger.log(`CRITICAL: ${CONTEXT} - Player ${playerToKickEmail} was removed from ${teamId}, but failed to regenerate join code: ${regenResult.message}`);
+      return createErrorResponse(`Player was removed, but a server error prevented join code regeneration. Please regenerate it manually.`);
+    }
+
+    // Step 3: Return a combined success message with the new join code for the UI.
+    return createSuccessResponse({
+        newJoinCode: regenResult.newJoinCode
+    }, `Player removed successfully. The new team join code is: ${regenResult.newJoinCode}`);
+
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
 
 /**
  * Orchestrates creating a new team, adding the creator as the first player/leader,
