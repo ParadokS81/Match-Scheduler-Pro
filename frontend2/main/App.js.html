@@ -1,0 +1,67 @@
+<script>
+/**
+ * Main Application Controller (App.js)
+ * Responsibilities:
+ * - Initializes the application after the page loads.
+ * - Fetches initial data from the server and holds the central state.
+ * - Initializes all services and UI components.
+ * - Acts as a mediator for communication between components.
+ */
+const App = (function() {
+  // Central state will be stored here
+  let _userContext, _allTeams, _weekDataCache;
+
+  function _fetchInitialData() {
+    console.log("App: Fetching initial data...");
+    // Call google.script.run to get all necessary data on page load.
+    // Store results in the private variables above.
+  }
+
+  // Public API
+  function init() {
+    console.log("Application Initializing...");
+
+    // NOTE: Enable this section once getInitialData() is available in backend Apps Script
+    // Fetch data and then initialize components
+    // google.script.run.withSuccessHandler(serverData => {
+      // _userContext = serverData.user;
+      // ... store all other data
+
+      // Initialize services
+      GridSelectionService.init();
+      TemplateService.init();
+
+      // Initialize all UI components
+      UserProfile.init('grid-cell-top-left');
+      WeekNavigation.init('grid-cell-top-center');
+      MatchFilters.init('grid-cell-top-right');
+      TeamInfo.init('grid-cell-middle-left');
+      FavoritesList.init('grid-cell-middle-right');
+      GridTools.init('grid-cell-bottom-left');
+      BrowseTeams.init('grid-cell-bottom-right');
+
+      // Initialize the two grid components separately
+      AvailabilityGrid.init('availability-grid-week1');
+      AvailabilityGrid.init('availability-grid-week2');
+
+      console.log("Application Ready.");
+    // }).getInitialData(); // This backend function will need to be created
+  }
+
+  function requestWeekChange(direction) {
+    console.log(`App: Received request to change week: ${direction}`);
+    // 1. Update internal state for which weeks are shown.
+    // 2. Get the new week HTML from the cache.
+    // 3. Command the AvailabilityGrid components to render the new HTML.
+    //    e.g., AvailabilityGrid.render('availability-grid-week1', newWeek1HTML);
+    //    e.g., AvailabilityGrid.render('availability-grid-week2', newWeek2HTML);
+    // 4. Command WeekNavigation to update its display.
+    //    e.g., WeekNavigation.updateDisplay(newWeekInfo);
+  }
+
+  return {
+    init: init,
+    requestWeekChange: requestWeekChange
+  };
+})();
+</script> 

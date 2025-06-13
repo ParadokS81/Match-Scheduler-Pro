@@ -1,20 +1,25 @@
 <!DOCTYPE html>
 <html>
-<?!= include('frontend2/01-head-content') ?>
-<body class="bg-slate-900 text-slate-300">
+  <?!= include('frontend2/01-head-content') ?>
 
-  <div id="main-app-container" class="h-screen flex flex-col">
+  <body class="bg-slate-900 text-slate-300">
 
-    <header class="text-center w-full max-w-screen-2xl mx-auto px-2 sm:px-4 py-5 flex-shrink-0">
-      <h1 class="text-4xl sm:text-5xl font-bold text-sky-400 flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-check-2 mr-3 text-sky-500"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="m16 20 2 2 4-4"/></svg>
-        Schedule Manager
-      </h1>
-    </header>
+    <div id="main-app-container" class="h-screen flex flex-col">
 
-    <?!= include('frontend2/02-body-structure') ?>
+      <header class="text-center w-full max-w-screen-2xl mx-auto px-2 sm:px-4 py-5 flex-shrink-0">
+        <h1 class="text-4xl sm:text-5xl font-bold text-sky-400 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-check-2 mr-3 text-sky-500"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="m16 20 2 2 4-4"/></svg>
+          Schedule Manager
+        </h1>
+      </header>
 
-  </div>
-  
+      <?!= include('frontend2/02-body-structure') ?>
+
+      <?!= /* include('frontend2/03-modals') */ ?>
+
+    </div>
+
+    <?!= include('frontend2/app-scripts') ?>
+    
   </body>
 </html>

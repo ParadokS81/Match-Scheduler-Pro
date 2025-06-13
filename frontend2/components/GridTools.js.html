@@ -1,0 +1,32 @@
+<script>
+/**
+ * Grid Tools Component (grid-cell-bottom-left)
+ * Contains controls for manipulating grid selections.
+ */
+const GridTools = (function() {
+  let _panel;
+
+  function _onAddMeClick(){
+    const selection = GridSelectionService.getSelection();
+    console.log('Add Me clicked for selection:', selection);
+    // Call backend to update availability
+  }
+
+  function _onClearClick() {
+      GridSelectionService.clear();
+      // Also need logic to visually un-select the cells in the grid.
+  }
+  
+  function init(panelId) {
+    _panel = document.getElementById(panelId);
+    if (!_panel) return;
+
+    _panel.querySelector('#btn-add-me').addEventListener('click', _onAddMeClick);
+    _panel.querySelector('#btn-clear-selection').addEventListener('click', _onClearClick);
+    // ... add listeners for all other buttons
+    console.log("GridTools Component Initialized.");
+  }
+
+  return { init };
+})();
+</script> 

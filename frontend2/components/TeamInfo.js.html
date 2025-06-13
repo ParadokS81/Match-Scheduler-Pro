@@ -1,0 +1,24 @@
+<script>
+/**
+ * Team Info Component (grid-cell-middle-left)
+ * Displays active team, logo, roster, and management links.
+ */
+const TeamInfo = (function() {
+  let _panel, _teamSelector, _logo, _roster;
+
+  function init(panelId) {
+    _panel = document.getElementById(panelId);
+    if (!_panel) return;
+    _teamSelector = _panel.querySelector('#team-selector-container');
+    _logo = _panel.querySelector('#team-logo-container img');
+    _roster = _panel.querySelector('#team-roster-container');
+    console.log("TeamInfo Component Initialized.");
+  }
+
+  function update(teamData) {
+    // Logic to update team tabs, logo src, and render the roster list.
+  }
+
+  return { init, update };
+})();
+</script> 

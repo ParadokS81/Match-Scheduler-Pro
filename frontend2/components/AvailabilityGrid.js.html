@@ -1,0 +1,42 @@
+<script>
+/**
+ * Availability Grid Component (reusable for middle-center and bottom-center)
+ * Renders and handles interactions with the main availability grid.
+ */
+const AvailabilityGrid = (function() {
+  let _gridInstances = {}; // Store data for each grid instance
+
+  function _onCellClick(event) {
+    const cell = event.target.closest('.availability-cell');
+    if (!cell) return;
+    
+    // Logic to identify cell coordinates and gridId
+    // Then call GridSelectionService.add() or remove()
+  }
+
+  function init(gridId) {
+    const gridElement = document.getElementById(gridId);
+    if (!gridElement) {
+        console.error(`AvailabilityGrid element #${gridId} not found!`);
+        return;
+    }
+    
+    _gridInstances[gridId] = {
+        element: gridElement,
+        // ... store other instance-specific data
+    };
+    
+    gridElement.addEventListener('click', _onCellClick);
+    console.log(`AvailabilityGrid Initialized for #${gridId}.`);
+  }
+
+  function render(gridId, htmlContent) {
+    const instance = _gridInstances[gridId];
+    if (instance) {
+      instance.element.innerHTML = htmlContent;
+    }
+  }
+
+  return { init, render };
+})();
+</script> 

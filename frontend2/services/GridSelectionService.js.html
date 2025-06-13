@@ -1,0 +1,39 @@
+<script>
+/**
+ * Grid Selection Service
+ * Manages the shared state of which availability grid cells are selected.
+ */
+const GridSelectionService = (function() {
+    let _selectedCells = new Set();
+
+    function init() {
+        console.log("GridSelectionService Initialized.");
+    }
+
+    function add(cellIdentifier) {
+        _selectedCells.add(cellIdentifier);
+        // We can add logic here to notify other components if needed.
+    }
+
+    function remove(cellIdentifier) {
+        _selectedCells.delete(cellIdentifier);
+    }
+
+    function clear() {
+        _selectedCells.clear();
+        console.log("Grid selection cleared.");
+    }
+
+    function getSelection() {
+        return Array.from(_selectedCells);
+    }
+
+    return {
+        init,
+        add,
+        remove,
+        clear,
+        getSelection
+    };
+})();
+</script> 

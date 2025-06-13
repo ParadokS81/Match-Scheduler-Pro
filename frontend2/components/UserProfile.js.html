@@ -1,0 +1,32 @@
+<script>
+/**
+ * User Profile Component (grid-cell-top-left)
+ * Displays user info and handles profile editing.
+ */
+const UserProfile = (function() {
+  let _panel, _displayName, _role, _editBtn;
+
+  function _onEditClick() {
+    console.log("Edit Profile clicked. Show modal.");
+  }
+
+  function init(panelId) {
+    _panel = document.getElementById(panelId);
+    if (!_panel) return;
+
+    _displayName = _panel.querySelector('#user-profile-display-name');
+    _role = _panel.querySelector('#user-profile-role');
+    _editBtn = _panel.querySelector('#edit-profile-btn');
+
+    _editBtn.addEventListener('click', _onEditClick);
+    console.log("UserProfile Component Initialized.");
+  }
+
+  function update(userData) {
+    _displayName.textContent = userData.name;
+    _role.textContent = userData.role;
+  }
+
+  return { init, update };
+})();
+</script> 
