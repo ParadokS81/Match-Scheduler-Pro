@@ -94,7 +94,10 @@ function availabilityManager_updatePlayerAvailability_SERVICE(userEmail, teamId,
         applyAvailabilityColors(teamSheet, updateResultData.modifiedCellRefs); 
       }
       // Assumes updateTeam is global from TeamDataManager.js, getCurrentTimestamp from Configuration.js
-      updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); 
+      updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+      
+      // Update the team's last updated timestamp
+      _tdm_touchTeamTimestamp(teamId);
 
       // Assumes findAllWeekBlocks is global from WeekBlockManager.js
       const allBlocksOnSheet = findAllWeekBlocks(teamSheet);
@@ -149,13 +152,31 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
             return createErrorResponse("Team data or availability sheet name not found.");
         }
         const teamSheet = ss.getSheetByName(teamDataObject.availabilitySheetName);
-        if (!teamSheet) {
-            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
-        }
+if (!teamSheet) {
+    return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
+}
 
-        let overallCellsModifiedCount = 0;
-        let overallInvalidCellsCount = 0;
-        const overallModifiedSheetCellReferences = [];
+// Check if team is sleeping and wake it up if needed
+if (!teamDataObject.isActive) {
+    Logger.log(`${CONTEXT}: Team ${teamId} is sleeping. Attempting to wake it up.`);
+    
+    const wakeUpResult = wakeUpTeam(teamId);
+    if (!wakeUpResult.success) {
+        return createErrorResponse(`Cannot update availability - team is sleeping and could not be awakened: ${wakeUpResult.message}`);
+    }
+    
+    Logger.log(`${CONTEXT}: Team ${teamId} was successfully awakened.`);
+    
+    // Refresh team data after wake-up
+    teamDataObject = getTeamData(teamId);
+    if (!teamDataObject) {
+        return createErrorResponse("Team data could not be retrieved after wake-up.");
+    }
+}
+
+let overallCellsModifiedCount = 0;
+let overallInvalidCellsCount = 0;
+const overallModifiedSheetCellReferences = [];
 
         // === NEW: Track cell changes for delta sync ===
         const cellChanges = [];
@@ -287,6 +308,9 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
                 applyAvailabilityColors(teamSheet, overallModifiedSheetCellReferences);
             }
             updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+            
+            // Update the team's last updated timestamp
+            _tdm_touchTeamTimestamp(teamId);
             
             // === NEW: Delta sync tracking ===
             const cellChanges = [];

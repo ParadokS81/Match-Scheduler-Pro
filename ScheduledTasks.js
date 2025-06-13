@@ -23,6 +23,7 @@ function performDailyMaintenanceTasks() {
     
     try {
         ensureFutureWeekBlocksForAllActiveTeams();
+        autoSleepInactiveTeams();
         // Other daily tasks can be added here in the future
         // e.g., cleanupOldArchivedData(), sendSummaryReports(), etc.
     } catch (e) {
@@ -141,6 +142,69 @@ function ensureFutureWeekBlocksForAllActiveTeams() {
     // Unlike service functions returning to an API, a scheduled task might not "return" an error object
     // in the same way. Logging the error is key. If this function was called by another that
     // expected a structured response, it would be: return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Checks all active teams and puts to sleep any that have been inactive for 28+ days
+ * Designed to be run as part of the daily maintenance tasks
+ */
+function autoSleepInactiveTeams() {
+  const CONTEXT = "ScheduledTasks.autoSleepInactiveTeams";
+  Logger.log(`${CONTEXT}: Starting auto-sleep check for inactive teams`);
+  
+  try {
+    // Get all active teams
+    const teamsResult = getAllTeams(true); // onlyActive = true
+    if (!teamsResult.success || !teamsResult.teams) {
+      Logger.log(`${CONTEXT}: Could not retrieve active teams. Error: ${teamsResult.message}`);
+      return;
+    }
+    
+    const activeTeams = teamsResult.teams;
+    if (activeTeams.length === 0) {
+      Logger.log(`${CONTEXT}: No active teams found. Nothing to process.`);
+      return;
+    }
+    
+    Logger.log(`${CONTEXT}: Checking ${activeTeams.length} active teams for inactivity...`);
+    
+    // Current timestamp for comparison
+    const now = new Date();
+    let teamsProcessedCount = 0;
+    let teamsPutToSleepCount = 0;
+    
+    for (const team of activeTeams) {
+      teamsProcessedCount++;
+      
+      // Skip teams without a timestamp (shouldn't happen, but just in case)
+      if (!team.lastUpdatedTimestamp) {
+        Logger.log(`${CONTEXT}: Team ${team.teamId} (${team.teamName}) has no last updated timestamp. Skipping.`);
+        continue;
+      }
+      
+      // Calculate days since last activity
+      const lastUpdated = new Date(team.lastUpdatedTimestamp);
+      const daysSinceUpdate = Math.floor((now - lastUpdated) / (1000 * 60 * 60 * 24));
+      
+      // If inactive for 28+ days, put to sleep
+      if (daysSinceUpdate >= 28) {
+        Logger.log(`${CONTEXT}: Team ${team.teamId} (${team.teamName}) has been inactive for ${daysSinceUpdate} days. Putting to sleep.`);
+        
+        const sleepResult = putTeamToSleep(team.teamId);
+        if (sleepResult.success) {
+          teamsPutToSleepCount++;
+          Logger.log(`${CONTEXT}: Successfully put team ${team.teamId} (${team.teamName}) to sleep.`);
+        } else {
+          Logger.log(`${CONTEXT}: Failed to put team ${team.teamId} (${team.teamName}) to sleep. Error: ${sleepResult.message}`);
+        }
+      }
+    }
+    
+    Logger.log(`${CONTEXT}: Finished. Processed ${teamsProcessedCount} teams. Put ${teamsPutToSleepCount} teams to sleep.`);
+    
+  } catch (e) {
+    Logger.log(`ERROR in ${CONTEXT}: ${e.message}\nStack: ${e.stack}`);
   }
 }
 

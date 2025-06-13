@@ -96,6 +96,7 @@ function createTeam(teamData, requestingUserEmail) {
     newTeamRow[tCols.INITIALS_LIST] = "";
     newTeamRow[tCols.AVAILABILITY_SHEET_NAME] = availabilitySheetName;
     newTeamRow[tCols.LOGO_URL] = teamData.logoUrl || "";
+    newTeamRow[tCols.LAST_UPDATED_TIMESTAMP] = getCurrentTimestamp();
 
     const appendResult = withProtectionBypass(() => {
       teamsSheet.appendRow(newTeamRow);
@@ -336,136 +337,6 @@ function updateTeam(teamId, updates, requestingUserEmail) {
   }
 }
 
-function archiveTeam(teamId, requestingUserEmail) {
-  const CONTEXT = "TeamDataManager.archiveTeam";
-  try {
-    const teamData = getTeamData(teamId, true); // Uses caching
-    if (!teamData) return createErrorResponse(`Team not found: ${teamId}`);
-
-    const hasAdminPerm = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_TEAMS);
-    const isLeader = isUserTeamLeader(requestingUserEmail, teamId); // Local helper
-    if (!hasAdminPerm && !isLeader) return createErrorResponse("Permission denied to archive team.");
-    if (!teamData.isActive) return createSuccessResponse({ teamId: teamId, alreadyArchived: true }, `Team ${teamData.teamName} is already inactive.`);
-
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-    const sheetDataValues = teamsSheet.getDataRange().getValues();
-    const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
-    const teamRowArrayIndex = sheetDataValues.findIndex(row => row[tCols.TEAM_ID] === teamId);
-    const teamRowSheetIndex = teamRowArrayIndex + 1;
-    if (teamRowArrayIndex === -1) return createErrorResponse(`Team ${teamId} consistency error.`);
-
-    const availabilitySheetName = teamData.availabilitySheetName;
-    const archivedSheetNameSuffix = `_ARCHIVED_${formatDate(new Date(), "YYYYMMDD")}`;
-    let potentialArchivedSheetName = availabilitySheetName + archivedSheetNameSuffix;
-    if (potentialArchivedSheetName.length > 100) {
-        potentialArchivedSheetName = availabilitySheetName.substring(0, 100 - archivedSheetNameSuffix.length -1) + "…" + archivedSheetNameSuffix;
-    }
-    const finalArchivedSheetName = potentialArchivedSheetName;
-
-    const archiveOperationResult = withProtectionBypass(() => {
-      teamsSheet.getRange(teamRowSheetIndex, tCols.IS_ACTIVE + 1).setValue(false);
-      teamsSheet.getRange(teamRowSheetIndex, tCols.LAST_ACTIVE + 1).setValue(getCurrentTimestamp());
-      let sheetRenamed = false;
-      if (availabilitySheetName) {
-        const teamAvailSheet = ss.getSheetByName(availabilitySheetName);
-        if (teamAvailSheet) {
-          try {
-            removeTeamSheetProtection(availabilitySheetName);
-            teamAvailSheet.setName(finalArchivedSheetName);
-            teamsSheet.getRange(teamRowSheetIndex, tCols.AVAILABILITY_SHEET_NAME + 1).setValue(finalArchivedSheetName);
-            sheetRenamed = true;
-          } catch (renameError) { Logger.log(`${CONTEXT}: Error renaming sheet ${availabilitySheetName}: ${renameError.message}.`); }
-        }
-      }
-      const disassociateResult = disassociatePlayersFromTeam(teamId, "Team Archived");
-      if (!disassociateResult.success) Logger.log(`${CONTEXT}: Player disassociation warning: ${disassociateResult.message}`);
-      
-      // === NEW: Remove team from player index ===
-      _pdm_removeTeamFromIndex(teamId);
-      
-      // === START: ADDED CACHE LOGIC ===
-      const cacheSheet = ss.getSheetByName('SYSTEM_CACHE');
-      if (cacheSheet) {
-        const teamIdsInData = cacheSheet.getRange('A2:A').getValues().flat();
-        const rowIndexInCache = teamIdsInData.indexOf(teamId);
-        if (rowIndexInCache !== -1) {
-          cacheSheet.deleteRow(rowIndexInCache + 2);
-          cacheSheet.getRange('G1').setValue(getCurrentTimestamp()); // Update master timestamp
-        }
-      }
-      // === END: ADDED CACHE LOGIC ===
-
-      return { success: true, sheetRenamed: sheetRenamed, finalArchivedSheetName: finalArchivedSheetName };
-    }, "Archive Team Operations", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-
-    if (!archiveOperationResult || !archiveOperationResult.success) {
-        return createErrorResponse("Failed to archive team: An error occurred.");
-    }
-    _invalidateTeamCache(teamId); // Call local helper
-    return createSuccessResponse({
-        teamId: teamId, teamName: teamData.teamName,
-        archivedSheetName: archiveOperationResult.finalArchivedSheetName,
-        sheetWasRenamed: archiveOperationResult.sheetRenamed
-    }, `Team ${teamData.teamName} (${teamId}) archived successfully.`);
-  } catch (e) {
-    return handleError(e, CONTEXT);
-  }
-}
-
-function hardDeleteArchivedTeam(teamId, requestingUserEmail) {
-  const CONTEXT = "TeamDataManager.hardDeleteArchivedTeam";
-  try {
-    if (!userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_TEAMS)) {
-         return createErrorResponse("Permission denied: Only Admins can permanently delete archived teams.");
-    }
-    const teamData = getTeamData(teamId, true); // Uses caching
-    if (!teamData) return createErrorResponse(`Team not found: ${teamId}`);
-    if (teamData.isActive) return createErrorResponse(`Team "${teamData.teamName}" is still active. Archive first.`);
-
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-    if (!teamsSheet) return createErrorResponse("Teams sheet not found.");
-
-    const sheetDataValues = teamsSheet.getDataRange().getValues();
-    const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
-    const teamRowIndexInArray = sheetDataValues.findIndex(row => row[tCols.TEAM_ID] === teamId);
-    if (teamRowIndexInArray === -1) return createErrorResponse(`Team ${teamId} not found in sheet for hard delete.`);
-    const teamRowSheetIndex = teamRowIndexInArray + 1;
-    const availabilitySheetName = teamData.availabilitySheetName;
-
-    // === NEW: Remove from index before deletion ===
-    _pdm_removeTeamFromIndex(teamId);
-
-    let sheetActuallyDeleted = false;
-    if (availabilitySheetName) {
-        const teamAvailSheet = ss.getSheetByName(availabilitySheetName);
-        if (teamAvailSheet) {
-            try {
-                removeTeamSheetProtection(availabilitySheetName);
-                ss.deleteSheet(teamAvailSheet);
-                sheetActuallyDeleted = true;
-            } catch(sheetDeleteError){ Logger.log(`${CONTEXT}: Error deleting sheet ${availabilitySheetName}: ${sheetDeleteError.message}.`); }
-        }
-    }
-
-    const deleteRowResult = withProtectionBypass(() => {
-      teamsSheet.deleteRow(teamRowSheetIndex);
-      return true;
-    }, "Delete Team Row", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
-
-    if (!deleteRowResult) return createErrorResponse("Failed to delete team row from Teams sheet.");
-
-    _invalidateTeamCache(teamId); // Call local helper
-    return createSuccessResponse({
-        teamId: teamId, teamName: teamData.teamName,
-        deletedSheetName: availabilitySheetName, sheetWasDeleted: sheetActuallyDeleted
-    }, `Team ${teamData.teamName} (${teamId}) and its data permanently deleted.`);
-  } catch (e) {
-    return handleError(e, CONTEXT);
-  }
-}
-
 function regenerateJoinCode(teamId, requestingUserEmail) {
   const CONTEXT = "TeamDataManager.regenerateJoinCode";
   try {
@@ -498,6 +369,113 @@ function regenerateJoinCode(teamId, requestingUserEmail) {
 
     _invalidateTeamCache(teamId); // Call local helper
     return createSuccessResponse({ teamId: teamId, teamName: teamData.teamName, newJoinCode: newJoinCode }, "Join code regenerated.");
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+function putTeamToSleep(teamId) {
+  const CONTEXT = "TeamDataManager.putTeamToSleep";
+  try {
+    const teamData = getTeamData(teamId, true);
+    if (!teamData) return createErrorResponse(`Team not found: ${teamId}`);
+    if (!teamData.isActive) return createSuccessResponse({ team: teamData }, `Team "${teamData.teamName}" is already sleeping.`);
+    
+    // Update team status to inactive
+    const updateResult = updateTeam(teamId, { isActive: false }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+    if (!updateResult.success) return updateResult;
+    
+    // Remove the team from the SYSTEM_CACHE sheet
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cacheSheet = ss.getSheetByName('SYSTEM_CACHE');
+    if (cacheSheet) {
+      const teamIdsInData = cacheSheet.getRange('A2:A').getValues().flat();
+      const rowIndexInCache = teamIdsInData.indexOf(teamId);
+      if (rowIndexInCache !== -1) {
+        withProtectionBypass(() => {
+          cacheSheet.deleteRow(rowIndexInCache + 2);
+          cacheSheet.getRange('G1').setValue(getCurrentTimestamp()); // Update master timestamp
+        }, "Update System Cache", 'SYSTEM_CACHE');
+      }
+    }
+    
+    // Invalidate the team's cache
+    _invalidateTeamCache(teamId);
+    
+    // Get the updated team data
+    const updatedTeamData = getTeamData(teamId, true);
+    
+    return createSuccessResponse(
+      { team: updatedTeamData },
+      `Team "${teamData.teamName}" has been put to sleep due to inactivity.`
+    );
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+function wakeUpTeam(teamId) {
+  const CONTEXT = "TeamDataManager.wakeUpTeam";
+  try {
+    const teamData = getTeamData(teamId, true);
+    if (!teamData) return createErrorResponse(`Team not found: ${teamId}`);
+    if (teamData.isActive) return createSuccessResponse({ team: teamData }, `Team "${teamData.teamName}" is already active.`);
+    
+    // Wake-up collision prevention
+    const wakeUpKey = `teamWakeUp_${teamId}`;
+    const cache = CacheService.getScriptCache();
+    const isWakingUp = cache.get(wakeUpKey);
+    
+    if (isWakingUp) {
+      Logger.log(`${CONTEXT}: Team ${teamId} is already being woken up by another process`);
+      Utilities.sleep(2000);
+      const refreshedTeam = getTeamData(teamId, true);
+      return createSuccessResponse({ team: refreshedTeam }, `Team "${teamData.teamName}" is being activated.`);
+    }
+    
+    // Set wake-up marker (expires in 30 seconds)
+    cache.put(wakeUpKey, 'true', 30);
+    
+    try {
+      // Update team status to active
+      const updateResult = updateTeam(
+        teamId, 
+        { isActive: true }, 
+        BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL
+      );
+      if (!updateResult.success) {
+        cache.remove(wakeUpKey);
+        return updateResult;
+      }
+      
+      // Update timestamp using helper
+      const timestampResult = _tdm_touchTeamTimestamp(teamId);
+      if (!timestampResult) {
+        Logger.log(`${CONTEXT}: Warning - Failed to update timestamp for team ${teamId}`);
+      }
+      
+      // Re-add the team to the SYSTEM_CACHE sheet
+      _cache_updateTeamData(teamId);
+      
+      // Invalidate the team's cache
+      _invalidateTeamCache(teamId);
+      
+      // Get the updated team data
+      const updatedTeamData = getTeamData(teamId, true);
+      
+      // Clear the wake-up marker
+      cache.remove(wakeUpKey);
+      
+      return createSuccessResponse(
+        { team: updatedTeamData },
+        `Team "${teamData.teamName}" has been awakened and is now active.`
+      );
+      
+    } catch (e) {
+      cache.remove(wakeUpKey);
+      throw e;
+    }
+    
   } catch (e) {
     return handleError(e, CONTEXT);
   }
@@ -630,4 +608,39 @@ function mapTeamRowToObject(row, tCols) {
         availabilitySheetName: row[tCols.AVAILABILITY_SHEET_NAME],
         logoUrl: row[tCols.LOGO_URL] || ""
     };
+}
+
+/**
+ * Updates the last activity timestamp for a team
+ * @param {string} teamId The ID of the team to update
+ * @return {boolean} Success status
+ */
+function _tdm_touchTeamTimestamp(teamId) {
+  const CONTEXT = "TeamDataManager._tdm_touchTeamTimestamp";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const teamsSheet = ss.getSheetByName(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+    if (!teamsSheet) return false;
+    
+    const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
+    const data = teamsSheet.getDataRange().getValues();
+    
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][tCols.TEAM_ID] === teamId) {
+        const rowIndex = i + 1;
+        withProtectionBypass(() => {
+          teamsSheet.getRange(rowIndex, tCols.LAST_UPDATED_TIMESTAMP + 1).setValue(getCurrentTimestamp());
+          SpreadsheetApp.flush();
+        }, "Update Team Timestamp", BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET);
+        _invalidateTeamCache(teamId);
+        return true;
+      }
+    }
+    
+    Logger.log(`${CONTEXT}: Team ${teamId} not found`);
+    return false;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} for team ${teamId}: ${e.message}`);
+    return false;
+  }
 }

@@ -500,13 +500,13 @@ function joinTeamByCode(userEmail, joinCode, playerInitialsInSlot) {
   }
 }
 
-function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false) {
+function leaveTeam(userEmail, teamId, requestingUserEmail = null, isKick = false) {
   const CONTEXT = "PlayerDataManager.leaveTeam";
   let playerToLeave = null;
   try {
     Logger.log(`${CONTEXT}: ${userEmail} attempting to leave team ${teamId}`);
     
-    if (!internalCall && !userHasPermission(userEmail, PERMISSIONS.LEAVE_TEAM)) {
+    if (!isKick && !userHasPermission(userEmail, PERMISSIONS.LEAVE_TEAM)) {
       return createErrorResponse("Permission denied to leave team.");
     }
     
@@ -541,12 +541,22 @@ function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false)
     }
     
     // If player is team leader, check if they're the last leader
-    if (playerToLeave[teamSlotKey.toLowerCase()].role === ROLES.TEAM_LEADER) {
-      const otherLeaders = getTeamLeaders(teamId).filter(leader => leader.playerId !== playerToLeave.playerId);
-      if (otherLeaders.length === 0) {
-        return createErrorResponse("Cannot leave team - you are the last team leader. Please assign a new leader first.");
-      }
-    }
+if (playerToLeave[teamSlotKey.toLowerCase()].role === ROLES.TEAM_LEADER) {
+  // Get team player count
+  const teamData = getTeamData(teamId);
+  if (!teamData) {
+    return createErrorResponse("Team not found.");
+  }
+  
+  // Check if player is the last leader AND not the last member
+  const otherLeaders = getTeamLeaders(teamId).filter(leader => leader.playerId !== playerToLeave.playerId);
+  if (otherLeaders.length === 0 && teamData.playerCount > 1) {
+    return createErrorResponse("You cannot leave the team as you are the last leader with other members remaining. Please promote another player to leader first.");
+  }
+  
+  // If we get here, the player is either not the last leader, or they are the last member
+  // In both cases, we allow them to leave
+}
     
     // Get players sheet
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -593,7 +603,14 @@ function leaveTeam(userEmail, teamId, requestingUserEmail, internalCall = false)
     
     _pdm_updateCurrentWeekRosterBlockOnTeamSheet(teamId, "LEFT", { displayName: playerToLeave.displayName, initials: playerToLeave[teamSlotKey.toLowerCase()].initials, email: userEmail });
     
-    return createSuccessResponse({ player: updatedPlayer }, `Successfully left team "${teamData.teamName}".`);
+    // After successful leave operation, check if team is now empty
+const updatedTeamData = getTeamData(teamId, true);
+if (updatedTeamData && updatedTeamData.playerCount === 0) {
+  Logger.log(`${CONTEXT}: Last member left team ${teamId}. Putting team to sleep.`);
+  putTeamToSleep(teamId);
+}
+
+return createSuccessResponse({ player: updatedPlayer }, `Successfully left team "${teamData.teamName}".`);
   } catch (e) {
     if (playerToLeave) _pdm_invalidatePlayerCache(userEmail, playerToLeave.playerId, `${CONTEXT}-Error`);
     return handleError(e, CONTEXT);
@@ -1767,6 +1784,60 @@ function syncMultipleTeamsPlayerData(teamIds) {
       operations: updateOperations,
       cacheUpdates: cacheUpdateResults
     }, `Synced data for ${updateOperations.length} teams.`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Kicks a player from a team (leader-initiated removal)
+ * @param {string} teamId The ID of the team
+ * @param {string} playerToKickEmail Email of the player to kick
+ * @param {string} requestingLeaderEmail Email of the leader performing the kick
+ * @return {Object} Success/error response
+ */
+function kickPlayerFromTeam(teamId, playerToKickEmail, requestingLeaderEmail) {
+  const CONTEXT = "PlayerDataManager.kickPlayerFromTeam";
+  try {
+    // Verify the requesting user is a leader of this team
+    if (!isUserTeamLeader(requestingLeaderEmail, teamId)) {
+      return createErrorResponse("Permission denied. Only team leaders can remove other players.");
+    }
+    
+    // Don't allow kicking self (use leaveTeam instead)
+    if (playerToKickEmail.toLowerCase() === requestingLeaderEmail.toLowerCase()) {
+      return createErrorResponse("You cannot kick yourself from the team. Use the 'Leave Team' option instead.");
+    }
+    
+    // Check if target player exists and is on the team
+    const playerToKick = getPlayerDataByEmail(playerToKickEmail, true);
+    if (!playerToKick) {
+      return createErrorResponse(`Player not found: ${playerToKickEmail}`);
+    }
+    
+    // Don't allow kicking another leader
+    let isOnTeam = false;
+    let isLeader = false;
+    
+    if (playerToKick.team1.teamId === teamId) {
+      isOnTeam = true;
+      isLeader = playerToKick.team1.role === ROLES.TEAM_LEADER;
+    } else if (playerToKick.team2.teamId === teamId) {
+      isOnTeam = true;
+      isLeader = playerToKick.team2.role === ROLES.TEAM_LEADER;
+    }
+    
+    if (!isOnTeam) {
+      return createErrorResponse(`Player ${playerToKickEmail} is not a member of this team.`);
+    }
+    
+    if (isLeader) {
+      return createErrorResponse("You cannot remove another team leader. Leaders must leave voluntarily.");
+    }
+    
+    // All checks passed, proceed with removal by calling leaveTeam internally
+    return leaveTeam(playerToKickEmail, teamId, requestingLeaderEmail, true);
     
   } catch (e) {
     return handleError(e, CONTEXT);
