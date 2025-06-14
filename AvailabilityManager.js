@@ -152,31 +152,31 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
             return createErrorResponse("Team data or availability sheet name not found.");
         }
         const teamSheet = ss.getSheetByName(teamDataObject.availabilitySheetName);
-if (!teamSheet) {
-    return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
-}
+        if (!teamSheet) {
+            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
+        }
 
-// Check if team is sleeping and wake it up if needed
-if (!teamDataObject.isActive) {
-    Logger.log(`${CONTEXT}: Team ${teamId} is sleeping. Attempting to wake it up.`);
-    
-    const wakeUpResult = wakeUpTeam(teamId);
-    if (!wakeUpResult.success) {
-        return createErrorResponse(`Cannot update availability - team is sleeping and could not be awakened: ${wakeUpResult.message}`);
-    }
-    
-    Logger.log(`${CONTEXT}: Team ${teamId} was successfully awakened.`);
-    
-    // Refresh team data after wake-up
-    teamDataObject = getTeamData(teamId);
-    if (!teamDataObject) {
-        return createErrorResponse("Team data could not be retrieved after wake-up.");
-    }
-}
+        // Check if team is sleeping and wake it up if needed
+        if (!teamDataObject.isActive) {
+            Logger.log(`${CONTEXT}: Team ${teamId} is sleeping. Attempting to wake it up.`);
+            
+            const wakeUpResult = wakeUpTeam(teamId);
+            if (!wakeUpResult.success) {
+                return createErrorResponse(`Cannot update availability - team is sleeping and could not be awakened: ${wakeUpResult.message}`);
+            }
+            
+            Logger.log(`${CONTEXT}: Team ${teamId} was successfully awakened.`);
+            
+            // Refresh team data after wake-up
+            teamDataObject = getTeamData(teamId);
+            if (!teamDataObject) {
+                return createErrorResponse("Team data could not be retrieved after wake-up.");
+            }
+        }
 
-let overallCellsModifiedCount = 0;
-let overallInvalidCellsCount = 0;
-const overallModifiedSheetCellReferences = [];
+        let overallCellsModifiedCount = 0;
+        let overallInvalidCellsCount = 0;
+        const overallModifiedSheetCellReferences = [];
 
         // === NEW: Track cell changes for delta sync ===
         const cellChanges = [];
@@ -261,9 +261,14 @@ const overallModifiedSheetCellReferences = [];
                             const sheetRow = blockStartSheetRow + sel.visualRow;
                             const sheetCol = daysStartSheetCol + sel.visualCol;
                             
+                            // === FIXED: Store week context with cell reference ===
                             overallModifiedSheetCellReferences.push({
                                 row: sheetRow,
-                                col: sheetCol
+                                col: sheetCol,
+                                year: year,              // Store year
+                                weekNumber: weekNumber,  // Store week number
+                                visualRow: sel.visualRow,
+                                visualCol: sel.visualCol
                             });
                             
                             // === NEW: Track this cell change ===
@@ -312,29 +317,7 @@ const overallModifiedSheetCellReferences = [];
             // Update the team's last updated timestamp
             _tdm_touchTeamTimestamp(teamId);
             
-            // === NEW: Delta sync tracking ===
-            const cellChanges = [];
-            for (const cellRef of overallModifiedSheetCellReferences) {
-                let newValue = '';
-                try {
-                    newValue = teamSheet.getRange(cellRef.row, cellRef.col).getDisplayValue();
-                } catch (e) {
-                    Logger.log(`${CONTEXT}: Error getting cell value at ${cellRef.row},${cellRef.col}: ${e.message}`);
-                    continue;
-                }
-                
-                const change = {
-                    year: weeklyPayloads.find(w => w.selections.some(s => 
-                        blockStartSheetRow + s.visualRow === cellRef.row))?.year || new Date().getFullYear(),
-                    week: weeklyPayloads.find(w => w.selections.some(s => 
-                        blockStartSheetRow + s.visualRow === cellRef.row))?.weekNumber || getISOWeekNumber(new Date()),
-                    visualRow: cellRef.row - blockStartSheetRow,
-                    visualCol: cellRef.col - daysStartSheetCol,
-                    newValue: newValue
-                };
-                cellChanges.push(change);
-            }
-            
+            // === FIXED: No need to recreate cellChanges - already populated above ===
             if (cellChanges.length > 0) {
                 _cache_trackCellChanges(teamId, teamSheet.getName(), cellChanges);
             }

@@ -199,32 +199,80 @@
       </div>
     </div>
     
-    <div id="grid-cell-middle-center" class="flex-grow bg-slate-800/60 rounded-lg shadow border border-slate-700 p-1 sm:p-1.5 overflow-y-auto"><table id="availability-grid-week1" class="table-fixed min-w-full w-full border-separate" style="border-spacing: 0.1rem;"><thead><tr><th class="time-label p-1 w-16 sm:w-20 text-xs font-medium text-slate-400 text-center sticky left-0 bg-slate-800 z-10">Time</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Mon 9th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Tue 10th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Wed 11th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Thu 12th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Fri 13th</th><th class="day-header-full p-1 text-xs font-medium text-amber-400 text-center bg-slate-700/50 rounded-t-sm">Sat 14th</th><th class="day-header-full p-1 text-xs font-medium text-amber-400 text-center bg-slate-700/50 rounded-t-sm">Sun 15th</th></tr></thead><tbody id="availability-grid-body-week1"></tbody></table></div>
+    <div id="grid-cell-middle-center" class="flex-grow bg-slate-800/60 rounded-lg shadow border border-slate-700 p-1 sm:p-1.5 overflow-y-hidden"><table id="availability-grid-week1" class="table-fixed min-w-full w-full border-separate" style="border-spacing: 0.1rem;"><thead><tr><th class="time-label p-1 w-16 sm:w-20 text-xs font-medium text-slate-400 text-center sticky left-0 bg-slate-800 z-10">Time</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Mon 9th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Tue 10th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Wed 11th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Thu 12th</th><th class="day-header-full p-1 text-xs font-medium text-sky-400 text-center bg-slate-700/50 rounded-t-sm">Fri 13th</th><th class="day-header-full p-1 text-xs font-medium text-amber-400 text-center bg-slate-700/50 rounded-t-sm">Sat 14th</th><th class="day-header-full p-1 text-xs font-medium text-amber-400 text-center bg-slate-700/50 rounded-t-sm">Sun 15th</th></tr></thead><tbody id="availability-grid-body-week1"></tbody></table></div>
     <div id="grid-cell-middle-right" class="w-72 flex-shrink-0 bg-slate-800/60 rounded-lg shadow border border-slate-700 p-3 flex flex-col gap-2"><div class="flex justify-between items-center flex-shrink-0"><h3 class="text-base font-semibold text-slate-200">Favorites</h3><button class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-300 px-2 py-0.5 rounded-sm shadow">All</button></div><div id="favorites-list-container" class="space-y-1 overflow-y-auto"><div class="bg-slate-700/40 hover:bg-slate-700/60 p-2 rounded flex items-center justify-between cursor-pointer"><div class="flex items-center space-x-2"><img src="https://www.quakeworld.nu/w/resources/assets/qwiki-logo.png" class="w-6 h-6 rounded-sm object-cover bg-slate-600"><h5 class="text-sm font-medium text-slate-200 truncate">Favorite Team A</h5></div><svg class="w-4 h-4 text-amber-400" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z"/></svg></div><div class="bg-slate-800/20 border-2 border-dashed border-slate-700/50 p-2 rounded flex items-center justify-center h-[42px]"><span class="text-xs text-slate-600 italic">Empty favorite slot</span></div><div class="bg-slate-800/20 border-2 border-dashed border-slate-700/50 p-2 rounded flex items-center justify-center h-[42px]"><span class="text-xs text-slate-600 italic">Empty favorite slot</span></div><div class="bg-slate-800/20 border-2 border-dashed border-slate-700/50 p-2 rounded flex items-center justify-center h-[42px]"><span class="text-xs text-slate-600 italic">Empty favorite slot</span></div><div class="bg-slate-800/20 border-2 border-dashed border-slate-700/50 p-2 rounded flex items-center justify-center h-[42px]"><span class="text-xs text-slate-600 italic">Empty favorite slot</span></div></div></div>
   </div>
 
 
   <div class="flex flex-row gap-4 flex-1">
 
-    <div id="grid-cell-bottom-left" class="w-72 flex-shrink-0 bg-slate-800/60 rounded-lg shadow border border-slate-700 p-3 flex flex-col gap-4">
-      <div>
-        <h3 class="text-base font-semibold text-slate-200 mb-2">Grid Tools</h3>
-        <div class="flex items-center space-x-1">
-          <button id="btn-select-all" class="text-sm bg-slate-600 hover:bg-slate-500 text-white font-semibold py-1 px-3 rounded shadow flex-1">All</button>
-          <button id="btn-clear-selection" class="text-sm bg-slate-600 hover:bg-slate-500 text-white font-semibold py-1 px-3 rounded shadow flex-1">Clear</button>
-        </div>
-        <div class="flex items-center space-x-1 mt-1">
-          <button id="btn-add-me" class="text-sm bg-green-600 hover:bg-green-700 text-white font-semibold py-1 px-3 rounded shadow flex-1">Add Me</button>
-          <button id="btn-remove-me" class="text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-1 px-3 rounded shadow flex-1">Remove Me</button>
-        </div>
-      </div>
-      <div class="border-t border-slate-700 pt-3 text-sm space-y-2">
-        <a href="#" id="btn-save-availability-template" class="text-slate-300 hover:text-sky-300 block">Save Availability Template</a>
-        <a href="#" id="btn-load-availability-template" class="text-slate-300 hover:text-sky-300 block">Load Availability Template</a>
-      </div>
+<div id="grid-cell-bottom-left" class="w-72 flex-shrink-0 bg-slate-800/60 rounded-lg shadow border border-slate-700 p-3 flex flex-col gap-3">
+  <!-- Section 1: Grid Selection Actions -->
+  <div>
+    <h3 class="text-base font-semibold text-slate-200 mb-2">Grid Selection</h3>
+    <div class="flex items-center space-x-1">
+      <button id="btn-select-all" class="text-sm bg-slate-600 hover:bg-slate-500 text-white font-semibold py-2 px-3 rounded shadow flex-1 h-10">All</button>
+      <button id="btn-clear-selection" class="text-sm bg-slate-600 hover:bg-slate-500 text-white font-semibold py-2 px-3 rounded shadow flex-1 h-10">Clear</button>
     </div>
+    <div class="flex items-center space-x-1 mt-1">
+      <button id="btn-add-me" class="text-sm bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-3 rounded shadow flex-1 h-10 disabled:opacity-50 disabled:cursor-not-allowed">Add Me</button>
+      <button id="btn-remove-me" class="text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded shadow flex-1 h-10 disabled:opacity-50 disabled:cursor-not-allowed">Remove Me</button>
+    </div>
+  </div>
+  
+  <!-- Section 2: Save Template -->
+  <div class="border-t border-slate-700 pt-3">
+    <h4 class="text-sm font-semibold text-slate-300 mb-2">Save Template</h4>
+    <div class="flex items-center space-x-1">
+      <button id="btn-save-template-week1" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 py-2 px-2 rounded flex-1 h-9 flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="mr-1">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+          <path d="M17 21v-8H7v8M7 3v5h8" fill="#1e293b"/>
+        </svg>
+        <span id="save-template-week1-label">Week 24</span>
+      </button>
+      <button id="btn-save-template-week2" class="text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 py-2 px-2 rounded flex-1 h-9 flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="mr-1">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+          <path d="M17 21v-8H7v8M7 3v5h8" fill="#1e293b"/>
+        </svg>
+        <span id="save-template-week2-label">Week 25</span>
+      </button>
+    </div>
+    <div id="save-template-status" class="text-xs text-green-400 mt-1 h-4"></div>
+  </div>
+  
+  <!-- Section 3: Load Template -->
+  <div class="border-t border-slate-700 pt-3">
+    <h4 class="text-sm font-semibold text-slate-300 mb-2">Load Template</h4>
+    <div class="space-y-1">
+      <button id="btn-load-template-week1" class="w-full text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 py-2 px-3 rounded h-9 flex items-center justify-between group">
+        <span id="load-template-week1-label">Load to Week 24</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400 group-hover:text-slate-200">
+          <path d="M7 10l5 5 5-5M12 15V3"/>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        </svg>
+      </button>
+      <button id="btn-load-template-week2" class="w-full text-xs bg-slate-600 hover:bg-slate-500 text-slate-200 py-2 px-3 rounded h-9 flex items-center justify-between group">
+        <span id="load-template-week2-label">Load to Week 25</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400 group-hover:text-slate-200">
+          <path d="M7 10l5 5 5-5M12 15V3"/>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        </svg>
+      </button>
+      <button id="btn-load-template-both" class="w-full text-xs bg-sky-600 hover:bg-sky-700 text-white py-2 px-3 rounded h-9 flex items-center justify-between">
+        <span>Load to Both Weeks</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M7 10l5 5 5-5M12 15V3"/>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        </svg>
+      </button>
+    </div>
+    <div id="load-template-status" class="text-xs text-sky-400 mt-1 h-4"></div>
+  </div>
+</div>
 
-    <div id="grid-cell-bottom-center" class="flex-grow bg-slate-800/60 rounded-lg shadow border border-slate-700 p-1 sm:p-1.5 overflow-y-auto">
+    <div id="grid-cell-bottom-center" class="flex-grow bg-slate-800/60 rounded-lg shadow border border-slate-700 p-1 sm:p-1.5 overflow-y-hidden">
       <table id="availability-grid-week2" class="table-fixed min-w-full w-full border-separate" style="border-spacing: 0.1rem;">
         <thead>
           <tr>
