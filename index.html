@@ -8,10 +8,12 @@
     <?!= include('frontend2/02-body-structure.html') ?>
     <?!= include('frontend2/03-modals.html') ?>
 
+    <script>
+      window.userContextFromServer = <?!= typeof userContextFromServer !== 'undefined' ? JSON.stringify(userContextFromServer) : 'null' ?>;
+    </script>
 
     <?!= include('frontend2/services/GridSelectionService.js') ?>
     <?!= include('frontend2/services/TemplateService.js') ?>
-
     <?!= include('frontend2/components/UserProfile.js') ?>
     <?!= include('frontend2/components/WeekNavigation.js') ?>
     <?!= include('frontend2/components/MatchFilters.js') ?>
@@ -25,7 +27,13 @@
 
     <script>
       window.onload = function() {
-        App.init();
+        // Pass the pre-loaded data directly into the App's init function
+        if (window.userContextFromServer) {
+          App.init(window.userContextFromServer);
+        } else {
+          console.error("Critical Error: Initial user context from server is missing.");
+          // You could display an error message to the user here
+        }
       };
     </script>
 

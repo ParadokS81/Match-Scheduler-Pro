@@ -28,6 +28,8 @@
  * @return {Object|null} User context or null.
  */
 
+// In WebAppAPI.js
+
 function getUserContext() {
   const CONTEXT = "WebAppAPI.getUserContext";
   try {
@@ -36,19 +38,29 @@ function getUserContext() {
       return getGuestUIContext();
     }
     const userEmail = activeUser.getEmail();
-    const uiContext = getUserUIContext(userEmail); // This gets user, teams, roles etc.
+    const uiContext = getUserUIContext(userEmail); 
 
     // If the user is on at least one team, fetch the schedule for the first team.
     if (uiContext.teams && uiContext.teams.length > 0) {
         const activeTeamId = uiContext.teams[0].teamId;
+        
+        // --- THIS IS THE MODIFIED LOGIC ---
+        // Calculate the start and end weeks to fetch all 4 weeks at once.
         const now = new Date();
-        const startYear = now.getFullYear();
-        const startWeek = getISOWeekNumber(now); // From Configuration.js
+        const futureDate = new Date();
+        futureDate.setDate(now.getDate() + 21); // 3 weeks (0, 1, 2, 3) into the future
 
-        // Get data for the two initially visible weeks
-        const scheduleResult = getTeamScheduleRange(userEmail, activeTeamId, startYear, startWeek);
+        const startYear = now.getFullYear();
+        const startWeek = getISOWeekNumber(now); 
+        const endYear = futureDate.getFullYear();
+        const endWeek = getISOWeekNumber(futureDate);
+        // --- END OF MODIFIED LOGIC ---
+
+        // Get data for all 4 weeks in a single call
+        const scheduleResult = getTeamScheduleRange(userEmail, activeTeamId, startYear, startWeek, endYear, endWeek);
+        
         if (scheduleResult.success) {
-            // Attach the schedule data to the context object we return
+            // Attach the full 4-week schedule data to the context object
             uiContext.schedule = scheduleResult;
         }
     }
@@ -56,7 +68,7 @@ function getUserContext() {
     return uiContext;
   } catch (e) {
     Logger.log(`Error in ${CONTEXT}: ${e.message}`);
-    return getGuestUIContext();
+    return getGuestUIContext(); 
   }
 }
 

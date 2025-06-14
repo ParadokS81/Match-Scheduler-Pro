@@ -2,9 +2,10 @@
 /**
  * Week Navigation Component (grid-cell-top-center)
  * Handles Previous/Next week buttons and updates week displays.
+ * V2 - Removed logic for the non-existent manual refresh button.
  */
 const WeekNavigation = (function() {
-  let _panel, _prevBtn, _nextBtn, _refreshBtn, _week1Display, _week2Display;
+  let _panel, _prevBtn, _nextBtn, _week1Display, _week2Display;
 
   function _onPrevClick() {
     App.requestWeekChange('prev');
@@ -14,35 +15,45 @@ const WeekNavigation = (function() {
     App.requestWeekChange('next');
   }
 
-  function _onRefreshClick() {
-    console.log("Manual refresh requested.");
-    // App.requestFullRefresh();
-  }
-
   function init(panelId) {
     _panel = document.getElementById(panelId);
-    if (!_panel) return;
+    if (!_panel) {
+        console.error("WeekNavigation.init: Panel #" + panelId + " not found.");
+        return;
+    }
 
+    // Find the elements that exist in the new layout
     _prevBtn = _panel.querySelector('#prev-week-btn');
     _nextBtn = _panel.querySelector('#next-week-btn');
-    _refreshBtn = _panel.querySelector('#manual-refresh-btn');
     _week1Display = _panel.querySelector('#current-week-display-1');
     _week2Display = _panel.querySelector('#current-week-display-2');
 
-    _prevBtn.addEventListener('click', _onPrevClick);
-    _nextBtn.addEventListener('click', _onNextClick);
-    _refreshBtn.addEventListener('click', _onRefreshClick);
+    // Safely add listeners only to the buttons that were found
+    if (_prevBtn) {
+      _prevBtn.addEventListener('click', _onPrevClick);
+    } else {
+      console.warn("WeekNavigation.init: Previous button #prev-week-btn not found.");
+    }
+
+    if (_nextBtn) {
+      _nextBtn.addEventListener('click', _onNextClick);
+    } else {
+      console.warn("WeekNavigation.init: Next button #next-week-btn not found.");
+    }
+    
     console.log("WeekNavigation Component Initialized.");
   }
 
   function updateDisplay(weekInfo) {
-    _week1Display.textContent = weekInfo.week1Text;
-    _week2Display.textContent = weekInfo.week2Text;
-    // Also manage disabled state of buttons
-    _prevBtn.disabled = !weekInfo.canGoPrev;
-    _nextBtn.disabled = !weekInfo.canGoNext;
+    // Check if the display elements exist before trying to update them
+    if (_week1Display) _week1Display.textContent = weekInfo.week1Text;
+    if (_week2Display) _week2Display.textContent = weekInfo.week2Text;
+    
+    // Check if the button elements exist before trying to update them
+    if (_prevBtn) _prevBtn.disabled = !weekInfo.canGoPrev;
+    if (_nextBtn) _nextBtn.disabled = !weekInfo.canGoNext;
   }
 
   return { init, updateDisplay };
 })();
-</script> 
+</script>
