@@ -1,23 +1,227 @@
 <script>
 const App = (function() {
-  function init() {
-    console.log("Application Initializing...");
+    // =========================================================================
+    // PRIVATE STATE
+    // =========================================================================
+    let _userContext = null;
+    let _activeTeam = null;
+    let _weekOffset = 0; // 0 = this week & next, 1 = week+2 & week+3, etc.
 
-    // Initialize the components that are currently loaded
-    TeamInfo.init('grid-cell-middle-left');
+
+    // =========================================================================
+    // PRIVATE METHODS (Data Fetching & Handling)
+    // =========================================================================
+
+    /**
+     * Fetches all the necessary data from the backend when the app starts.
+     */
+    function _fetchInitialData() {
+        console.log("App: Fetching initial data from server...");
+        google.script.run
+            .withSuccessHandler(_onInitialDataSuccess)
+            .withFailureHandler(_onDataFetchFailure)
+            .getUserContext();
+    }
+
+    /**
+     * MERGED: This function now handles all UI updates and grid rendering upon initial data load.
+     */
+    function _onInitialDataSuccess(context) {
+        console.log("App: Initial data received.", context);
+        if (!context || !context.isAuthenticated) {
+            console.log("App: User is not authenticated.");
+            // Logic to show a "Please Log In" view would go here.
+            return;
+        }
+
+        // 1. Store the data in our private state.
+        _userContext = context;
+        _activeTeam = context.teams && context.teams.length > 0 ? context.teams[0] : null;
+
+        // 2. Update all relevant UI components with the new data.
+        // UserProfile.update(_userContext);
+        TeamInfo.update(_activeTeam, _userContext);
+        // FavoritesList.render(_userContext.favorites);
+        // BrowseTeams.render(_allTeams); 
+        
+        // 3. Fetch the schedule for the initial view (current week and next).
+        _fetchScheduleForWeeks();
+    }
+
+    /**
+     * Fetches schedule data for the currently selected weeks from the backend.
+     */
+    function _fetchScheduleForWeeks() {
+        if (!_activeTeam) return;
+
+        console.log(`App: Fetching schedule for week offset: ${_weekOffset}`);
+        const weeksToFetch = _calculateWeeksToDisplay();
+        const week1 = weeksToFetch[0];
+        const week2 = weeksToFetch[1];
+
+        // This backend function gets data for two weeks at once.
+        google.script.run
+            .withSuccessHandler(_onScheduleUpdateSuccess)
+            .withFailureHandler(_onDataFetchFailure)
+            .getTeamSchedulesForDisplay(_activeTeam.teamId, week1.year, week1.week, week2.year, week2.week);
+    }
+
+    /**
+     * Success handler for when new schedule data is received from the backend.
+     */
+    function _onScheduleUpdateSuccess(response) {
+        console.log("App: Received new schedule data.", response);
+        if (!response.success) {
+            _onDataFetchFailure(response.message);
+            return;
+        }
+        
+        if (response.weeks && response.weeks.length > 0) {
+            const week1Data = response.weeks[0];
+            const week2Data = response.weeks[1];
+
+            // Render the new data in the availability grids
+            if (week1Data) AvailabilityGrid.render('availability-grid-week1', week1Data);
+            if (week2Data) AvailabilityGrid.render('availability-grid-week2', week2Data);
+
+            // Update the navigation component with new text and button states
+            WeekNavigation.updateDisplay({
+                week1Text: `Week ${week1Data.weekNumber} (${week1Data.year})`,
+                week2Text: `Week ${week2Data.weekNumber} (${week2Data.year})`,
+                canGoPrev: _weekOffset > 0,
+                canGoNext: true // For now, we assume we can always go forward
+            });
+
+            // Adjust the layout to fit the newly rendered grids
+            setTimeout(_updatePanelHeights, 100); // Small delay for browser rendering
+        }
+    }
+
+    /**
+     * This function runs if any backend call fails.
+     */
+    function _onDataFetchFailure(error) {
+        console.error("App: Failed to fetch data from server.", error);
+        // Ideally, show a user-friendly error message in the UI.
+    }
+
+
+    // =========================================================================
+    // PRIVATE METHODS (Utilities)
+    // =========================================================================
+
+    /**
+     * MOVED: This layout logic is now reachable and can be called after rendering.
+     * It measures the main grids and adjusts side panel heights to match.
+     */
+    function _updatePanelHeights() {
+        console.log("App: Updating panel heights...");
+        const week1Grid = document.getElementById('availability-grid-week1');
+        const week2Grid = document.getElementById('availability-grid-week2');
+        if (!week1Grid || !week2Grid) return;
+
+        const week1Container = week1Grid.parentElement;
+        const week2Container = week2Grid.parentElement;
+        if (!week1Container || !week2Container) return;
+        
+        const week1Height = week1Container.getBoundingClientRect().height;
+        const week2Height = week2Container.getBoundingClientRect().height;
+        
+        const favoritesPanel = document.getElementById('grid-cell-middle-right');
+        const browseTeamsPanel = document.getElementById('grid-cell-bottom-right');
+        
+        if (favoritesPanel) {
+            const listContainer = favoritesPanel.querySelector('#favorites-list-container');
+            if (listContainer) listContainer.style.height = `${week1Height - 40}px`; // 40px is approx height of panel header
+        }
+        
+        if (browseTeamsPanel) {
+            const listContainer = browseTeamsPanel.querySelector('#browse-teams-list-container');
+            if(listContainer) listContainer.style.height = `${week2Height - 80}px`; // 80px is approx height of header + filter
+        }
+        console.log("App: Panel heights adjusted.");
+    }
+
+    /**
+     * Calculates the two weeks to display based on the current offset.
+     * @returns {Array<Object>} An array of two week objects, e.g., [{year: 2025, week: 24}, ...]
+     */
+    function _calculateWeeksToDisplay() {
+        const weeks = [];
+        const today = new Date();
+        const WEEKS_TO_SHOW = 2;
+        for (let i = 0; i < WEEKS_TO_SHOW; i++) {
+            const date = new Date(today);
+            date.setDate(date.getDate() + ((_weekOffset * WEEKS_TO_SHOW) + i) * 7);
+            
+            // Re-using the ISO week number logic from your backend for consistency
+            const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+            const dayNum = d.getUTCDay() || 7;
+            d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+            const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+            const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+            weeks.push({ year: d.getUTCFullYear(), week: weekNo });
+        }
+        return weeks;
+    }
+
+
+    // =========================================================================
+    // PUBLIC API
+    // =========================================================================
+
+    /**
+     * MERGED: Initializes all services and components. This is the main entry point of the app.
+     */
+    function init() {
+        console.log("App: Initializing all components...");
+
+        // --- Initialize Services ---
+        // GridSelectionService.init();
+
+        // --- Initialize All UI Components ---
+        TeamInfo.init('grid-cell-middle-left');
+        AvailabilityGrid.init('availability-grid-week1');
+        AvailabilityGrid.init('availability-grid-week2');
+        FavoritesList.init('grid-cell-middle-right');
+        BrowseTeams.init('grid-cell-bottom-right');
+        UserProfile.init('grid-cell-top-left');
+        WeekNavigation.init('grid-cell-top-center');
+        MatchFilters.init('grid-cell-top-right');
+        GridTools.init('grid-cell-bottom-left');
+        
+        // After setting up the components, fetch the initial data to populate them.
+        _fetchInitialData();
+    }
     
-    // As you uncomment components in index.html, you will uncomment their initializers here.
-    // UserProfile.init('grid-cell-top-left');
-    // ...etc
+    /**
+     * Public function for components to request a week change.
+     * @param {string} direction - 'prev' or 'next'.
+     */
+    function requestWeekChange(direction) {
+        if (direction === 'next') {
+            _weekOffset++;
+        } else if (direction === 'prev' && _weekOffset > 0) {
+            _weekOffset--;
+        }
+        _fetchScheduleForWeeks();
+    }
+    
+    /**
+     * Public function for components to get the currently active team data.
+     */
+    function getActiveTeam() {
+        return _activeTeam;
+    }
 
-    console.log("Application Ready.");
-  }
 
-  // You can add functions here to allow components to communicate with each other
-  // For example: App.requestDataRefresh();
+    // MOVED: The return statement must be at the end of the module definition.
+    // This "reveals" our public functions so they can be called from outside.
+    return {
+        init: init,
+        requestWeekChange: requestWeekChange,
+        getActiveTeam: getActiveTeam
+    };
 
-  return {
-    init: init
-  };
 })();
 </script>

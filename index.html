@@ -1,65 +1,33 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <?!= include('frontend2/01-head-content') ?>
+    <?!= include('frontend2/01-head-content.html') ?>
   </head>
   <body class="bg-slate-900 text-slate-300">
 
-    <div id="main-app-container" class="h-screen flex flex-col">
-      <header class="text-center w-full max-w-screen-2xl mx-auto px-2 sm:px-4 py-5 flex-shrink-0">
-        <h1 class="text-4xl sm:text-5xl font-bold text-sky-400 flex items-center justify-center">
-          <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-check-2 mr-3 text-sky-500"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="m16 20 2 2 4-4"/></svg>
-          Schedule Manager
-        </h1>
-      </header>
+    <?!= include('frontend2/02-body-structure.html') ?>
+    <?!= include('frontend2/03-modals.html') ?>
 
-      <?!= include('frontend2/02-body-structure') ?>
-      <?!= include('frontend2/03-modals') ?>
-    </div>
+
+    <?!= include('frontend2/services/GridSelectionService.js') ?>
+    <?!= include('frontend2/services/TemplateService.js') ?>
+
+    <?!= include('frontend2/components/UserProfile.js') ?>
+    <?!= include('frontend2/components/WeekNavigation.js') ?>
+    <?!= include('frontend2/components/MatchFilters.js') ?>
+    <?!= include('frontend2/components/TeamInfo.js') ?>
+    <?!= include('frontend2/components/AvailabilityGrid.js') ?>
+    <?!= include('frontend2/components/FavoritesList.js') ?>
+    <?!= include('frontend2/components/GridTools.js') ?>
+    <?!= include('frontend2/components/BrowseTeams.js') ?>
+
+    <?!= include('frontend2/main/App.js') ?>
 
     <script>
-      // Content from your App.js.html file
-      const App = (function() {
-        let _userContext, _allTeams, _weekDataCache;
-
-        function _fetchInitialData() {
-          console.log("App: Fetching initial data...");
-        }
-
-        function init() {
-          console.log("SUCCESS: Application Initializing from within index.html!");
-
-          // For now, we are skipping the backend data fetch to ensure the UI components can load
-          // without waiting for a server response.
-
-          // Initialize services
-          // GridSelectionService.init(); // We will add these back one by one
-          // TemplateService.init();
-
-          // Initialize all UI components
-          // UserProfile.init('grid-cell-top-left');
-          // WeekNavigation.init('grid-cell-top-center');
-          // MatchFilters.init('grid-cell-top-right');
-          // TeamInfo.init('grid-cell-middle-left');
-          // ... etc ...
-
-          console.log("Application Ready. The 'App is not defined' error should be gone.");
-        }
-
-        function requestWeekChange(direction) {
-          console.log(`App: Received request to change week: ${direction}`);
-        }
-
-        return {
-          init: init,
-          requestWeekChange: requestWeekChange
-        };
-      })();
-
-      // The listener that starts the app
-      document.addEventListener('DOMContentLoaded', function() {
+      window.onload = function() {
         App.init();
-      });
+      };
     </script>
+
   </body>
 </html>

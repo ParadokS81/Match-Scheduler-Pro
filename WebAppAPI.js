@@ -27,18 +27,36 @@
  * This is typically called by WebAppController.doGet -> getUserContextForTemplate.
  * @return {Object|null} User context or null.
  */
-// WebAppAPI.js
+
 function getUserContext() {
   const CONTEXT = "WebAppAPI.getUserContext";
   try {
-    const activeUser = getActiveUser(); // DIRECT CALL
+    const activeUser = getActiveUser();
     if (!activeUser) {
-      return getGuestUIContext(); // DIRECT CALL
+      return getGuestUIContext();
     }
-    return getUserUIContext(activeUser.getEmail()); // DIRECT CALL
+    const userEmail = activeUser.getEmail();
+    const uiContext = getUserUIContext(userEmail); // This gets user, teams, roles etc.
+
+    // If the user is on at least one team, fetch the schedule for the first team.
+    if (uiContext.teams && uiContext.teams.length > 0) {
+        const activeTeamId = uiContext.teams[0].teamId;
+        const now = new Date();
+        const startYear = now.getFullYear();
+        const startWeek = getISOWeekNumber(now); // From Configuration.js
+
+        // Get data for the two initially visible weeks
+        const scheduleResult = getTeamScheduleRange(userEmail, activeTeamId, startYear, startWeek);
+        if (scheduleResult.success) {
+            // Attach the schedule data to the context object we return
+            uiContext.schedule = scheduleResult;
+        }
+    }
+    
+    return uiContext;
   } catch (e) {
     Logger.log(`Error in ${CONTEXT}: ${e.message}`);
-    return getGuestUIContext(); // DIRECT CALL (in fallback)
+    return getGuestUIContext();
   }
 }
 
