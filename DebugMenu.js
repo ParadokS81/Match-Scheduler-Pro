@@ -36,6 +36,7 @@ function onOpen(e) {
       .addItem('🔍 Verify Test Data Integrity', 'menu_verifyTestDataOnly')
       .addItem('🧹 Clean Up Test Data Only', 'menu_cleanupTestDataOnly')
       .addItem('🔨 Rebuild Player Index', 'debug_rebuildPlayerIndex')
+      .addItem('🔨 Rebuild Week Block Index', 'menu_rebuildWeekBlockIndex')
       .addSeparator()
       .addSubMenu(advancedTestingMenu)
       .addSeparator()
@@ -83,6 +84,13 @@ function menu_listAllProjectTriggers() {
         Logger.log("listAllProjectTriggers function not found (expected in ScheduledTasks.gs).");
         try { SpreadsheetApp.getUi().alert("Error", "Function to list triggers not found."); } catch(e){}
     }
+}
+
+/**
+ * Menu handler for rebuilding week block index
+ */
+function menu_rebuildWeekBlockIndex() {
+  runAndToast(rebuildWeekBlockIndex, "Rebuild Week Block Index");
 }
 
 // =============================================================================

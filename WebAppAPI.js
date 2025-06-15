@@ -1,6 +1,7 @@
 /**
  * Schedule Manager - Web App API (Phase 1D Refactor)
  *
+ * @version 1.3.0 (2025-06-12) - Added delta sync API endpoints for real-time updates
  * @version 1.2.0 (2025-06-10) - Added SSR endpoint foundation
  * @version 1.1.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
  *
@@ -8,6 +9,7 @@
  * Uses centralized ROLES/PERMISSIONS and functions from PermissionManager.js and PlayerDataManager.js.
  *
  * CHANGELOG:
+ * 1.3.0 - 2025-06-12 - Added api_getScheduleChanges, api_batchCheckForChanges, api_warmCacheForTeams for delta sync.
  * 1.2.0 - 2025-06-10 - Added api_getPreRenderedScheduleGrids foundation for server-side rendering.
  * 1.1.1 - 2025-05-30 - Updated to use PermissionManager & PlayerDataManager for user context/permissions.
  * 1.1.0 - 2025-05-30 - Phase 1C: Added logo management endpoints and enhanced validation.
@@ -25,18 +27,48 @@
  * This is typically called by WebAppController.doGet -> getUserContextForTemplate.
  * @return {Object|null} User context or null.
  */
-// WebAppAPI.js
+
+// In WebAppAPI.js
+
 function getUserContext() {
   const CONTEXT = "WebAppAPI.getUserContext";
   try {
-    const activeUser = getActiveUser(); // DIRECT CALL
+    const activeUser = getActiveUser();
     if (!activeUser) {
-      return getGuestUIContext(); // DIRECT CALL
+      return getGuestUIContext();
     }
-    return getUserUIContext(activeUser.getEmail()); // DIRECT CALL
+    const userEmail = activeUser.getEmail();
+    const uiContext = getUserUIContext(userEmail); 
+
+    // If the user is on at least one team, fetch the schedule for the first team.
+    if (uiContext.teams && uiContext.teams.length > 0) {
+        const activeTeamId = uiContext.teams[0].teamId;
+        
+        // --- THIS IS THE MODIFIED LOGIC ---
+        // Calculate the start and end weeks to fetch all 4 weeks at once.
+        const now = new Date();
+        const futureDate = new Date();
+        futureDate.setDate(now.getDate() + 21); // 3 weeks (0, 1, 2, 3) into the future
+
+        const startYear = now.getFullYear();
+        const startWeek = getISOWeekNumber(now); 
+        const endYear = futureDate.getFullYear();
+        const endWeek = getISOWeekNumber(futureDate);
+        // --- END OF MODIFIED LOGIC ---
+
+        // Get data for all 4 weeks in a single call
+        const scheduleResult = getTeamScheduleRange(userEmail, activeTeamId, startYear, startWeek, endYear, endWeek);
+        
+        if (scheduleResult.success) {
+            // Attach the full 4-week schedule data to the context object
+            uiContext.schedule = scheduleResult;
+        }
+    }
+    
+    return uiContext;
   } catch (e) {
     Logger.log(`Error in ${CONTEXT}: ${e.message}`);
-    return getGuestUIContext(); // DIRECT CALL (in fallback)
+    return getGuestUIContext(); 
   }
 }
 
@@ -151,6 +183,54 @@ function refreshUserSession() {
       context: freshContext 
     });
     
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * This is the "logic" function with the correct 'api_' prefix.
+ */
+function api_kickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+  const CONTEXT = "WebAppAPI.kickPlayerAndRegenerateCode";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) {
+      return createErrorResponse("Authentication required.");
+    }
+    const leaderEmail = activeUser.getEmail();
+
+    const kickResult = kickPlayerFromTeam(teamId, playerToKickEmail, leaderEmail);
+
+    if (!kickResult.success) {
+      return kickResult;
+    }
+
+    const regenResult = regenerateJoinCode(teamId, leaderEmail);
+
+    if (!regenResult.success) {
+      Logger.log(`CRITICAL: ${CONTEXT} - Player ${playerToKickEmail} was removed from ${teamId}, but failed to regenerate join code: ${regenResult.message}`);
+      return createErrorResponse(`Player was removed, but a server error prevented join code regeneration. Please regenerate it manually.`);
+    }
+
+    return createSuccessResponse({
+        newJoinCode: regenResult.newJoinCode
+    }, `Player removed successfully. The new team join code is: ${regenResult.newJoinCode}`);
+
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// Add this function to WebAppAPI.js
+function api_getTeamData(teamId) {
+  const CONTEXT = "WebAppAPI.api_getTeamData";
+  try {
+    const teamData = getTeamData(teamId); // This function already exists in TeamDataManager.js
+    if (!teamData) {
+      return createErrorResponse("Team not found.");
+    }
+    return createSuccessResponse({ team: teamData });
   } catch (e) {
     return handleError(e, CONTEXT);
   }
@@ -325,7 +405,47 @@ function leaveTeamById(teamId) { // This is the API function name from original 
   }
 }
 
-// In WebAppAPI.js (add this new function)
+/**
+ * Kicks a player and regenerates the team join code in a single atomic action.
+ * @param {string} teamId The ID of the team.
+ * @param {string} playerToKickEmail The email of the player to be removed.
+ * @return {Object} A success response containing the new join code, or an error response.
+ */
+function kickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+  const CONTEXT = "WebAppAPI.kickPlayerAndRegenerateCode";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) {
+      return createErrorResponse("Authentication required.");
+    }
+    const leaderEmail = activeUser.getEmail();
+
+    // Step 1: Kick the player. This function already contains all necessary permission checks.
+    const kickResult = kickPlayerFromTeam(teamId, playerToKickEmail, leaderEmail);
+
+    if (!kickResult.success) {
+      // If the kick fails for any reason (e.g., permissions, player not on team), stop and return the error.
+      return kickResult;
+    }
+
+    // Step 2: If the kick was successful, immediately regenerate the join code.
+    const regenResult = regenerateJoinCode(teamId, leaderEmail);
+
+    if (!regenResult.success) {
+      // This is an edge case, but we should handle it. The player was kicked, but the code wasn't regenerated.
+      Logger.log(`CRITICAL: ${CONTEXT} - Player ${playerToKickEmail} was removed from ${teamId}, but failed to regenerate join code: ${regenResult.message}`);
+      return createErrorResponse(`Player was removed, but a server error prevented join code regeneration. Please regenerate it manually.`);
+    }
+
+    // Step 3: Return a combined success message with the new join code for the UI.
+    return createSuccessResponse({
+        newJoinCode: regenResult.newJoinCode
+    }, `Player removed successfully. The new team join code is: ${regenResult.newJoinCode}`);
+
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
 
 /**
  * Orchestrates creating a new team, adding the creator as the first player/leader,
@@ -733,15 +853,19 @@ function logFrontendError(errorMessage, errorContext = "FrontendClient") {
 
 // In WebAppAPI.js
 function checkForScheduleUpdates(teamId, clientLastLoadTimestampMillis) {
+  // Use enhanced version if available
+  if (typeof checkForScheduleUpdatesEnhanced === 'function') {
+    return checkForScheduleUpdatesEnhanced(teamId, clientLastLoadTimestampMillis);
+  }
+  
   const CONTEXT = "WebAppAPI.checkForScheduleUpdates";
   try {
     if (!teamId) {
       Logger.log(`[${CONTEXT}] Error: Team ID required.`);
       return { success: false, hasChanged: false, error: "Team ID required." };
     }
-    // Assumes getTeamData is global (from TeamDataManager.js)
-    const teamData = getTeamData(teamId, true); // Get latest, includeInactive true just in case
-
+    
+    const teamData = getTeamData(teamId, true);
     if (!teamData) {
       Logger.log(`[${CONTEXT}] Error: Team ${teamId} not found.`);
       return { success: false, hasChanged: false, error: `Team ${teamId} not found.` };
@@ -879,6 +1003,262 @@ function apiToggleFavoriteTeam(teamId, isFavorite) {
 
     return createSuccessResponse({ favorites: favoritesData.teams }, `Favorites updated.`);
 
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// === HANDOVER TASK: Implement delta sync API endpoints (Phase 2A)
+
+// =============================================================================
+// DELTA SYNC API ENDPOINTS
+// =============================================================================
+
+/**
+ * Gets schedule changes since a given timestamp
+ * Returns only what changed to enable delta updates in frontend
+ * @param {string} teamId - The team to check
+ * @param {number} sinceTimestamp - Client's last known timestamp (milliseconds)
+ * @return {Object} Change information with delta data
+ */
+function api_getScheduleChanges(teamId, sinceTimestamp) {
+  const CONTEXT = "WebAppAPI.api_getScheduleChanges";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    // Validate inputs
+    if (!teamId) {
+      return createErrorResponse("Team ID required.");
+    }
+    
+    // Get team metadata to check if there are changes
+    const metadata = _cache_getTeamMetadata(teamId);
+    if (!metadata || metadata.lastActive <= sinceTimestamp) {
+      return createSuccessResponse({
+        hasChanges: false,
+        serverTimestamp: metadata ? metadata.lastActive : new Date().getTime(),
+        metadata: metadata
+      });
+    }
+    
+    // Get team data for sheet name and roster info
+    const teamData = getTeamData(teamId);
+    if (!teamData) {
+      return createErrorResponse("Team not found.");
+    }
+    
+    // Determine what type of changes occurred
+    const changeType = metadata.lastUpdateType;
+    const isOwnChange = metadata.lastUpdatedBy === activeUser.getEmail();
+    
+    // Build response based on change type
+    const response = {
+      hasChanges: true,
+      changeType: changeType,
+      changedBy: metadata.lastUpdatedBy,
+      isOwnChange: isOwnChange,
+      serverTimestamp: metadata.lastActive,
+      version: metadata.version
+    };
+    
+    switch (changeType) {
+      case BLOCK_CONFIG.CHANGE_TYPES.AVAILABILITY:
+        if (teamData.availabilitySheetName) {
+          const cellChanges = _cache_getCellChanges(teamId, teamData.availabilitySheetName);
+          if (cellChanges && cellChanges.timestamp > sinceTimestamp) {
+            response.changes = cellChanges;
+          }
+        }
+        break;
+        
+      case BLOCK_CONFIG.CHANGE_TYPES.ROSTER:
+        response.rosterChange = metadata.changeDetails;
+        response.roster = getTeamRosterFromIndex(teamId);
+        break;
+        
+      case BLOCK_CONFIG.CHANGE_TYPES.TEAM_SETTINGS:
+        response.settingsChanged = metadata.changeDetails.updates;
+        break;
+        
+      case BLOCK_CONFIG.CHANGE_TYPES.PLAYER_PROFILE:
+        response.profileChange = metadata.changeDetails;
+        break;
+    }
+    
+    return createSuccessResponse(response);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Batch check for changes across multiple teams
+ * Useful for checking favorites or all user's teams at once
+ * @param {Array<Object>} teamChecks - Array of {teamId, lastTimestamp} objects
+ * @return {Object} Summary of which teams have changes
+ */
+function api_batchCheckForChanges(teamChecks) {
+  const CONTEXT = "WebAppAPI.api_batchCheckForChanges";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    if (!Array.isArray(teamChecks) || teamChecks.length === 0) {
+      return createErrorResponse("Team checks array required.");
+    }
+    
+    const results = [];
+    
+    for (const check of teamChecks) {
+      if (!check.teamId) continue;
+      
+      const metadata = _cache_getTeamMetadata(check.teamId);
+      const hasChanges = metadata && metadata.lastActive > (check.lastTimestamp || 0);
+      
+      results.push({
+        teamId: check.teamId,
+        hasChanges: hasChanges,
+        changeType: hasChanges ? metadata.lastUpdateType : null,
+        serverTimestamp: metadata ? metadata.lastActive : null
+      });
+    }
+    
+    return createSuccessResponse({
+      checks: results,
+      checkedCount: results.length,
+      changedCount: results.filter(r => r.hasChanges).length
+    });
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Pre-caches data for favorite teams
+ * Called on login to warm the cache
+ * @param {Array<string>} teamIds - Array of team IDs to pre-cache
+ * @return {Object} Cache warming results
+ */
+function api_warmCacheForTeams(teamIds) {
+  const CONTEXT = "WebAppAPI.api_warmCacheForTeams";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    if (!Array.isArray(teamIds) || teamIds.length === 0) {
+      return createSuccessResponse({ warmedCount: 0 }, "No teams to warm.");
+    }
+    
+    const results = [];
+    const userEmail = activeUser.getEmail();
+    
+    for (const teamId of teamIds) {
+      try {
+        const teamData = getTeamData(teamId);
+        if (teamData) {
+          const roster = getTeamRosterFromIndex(teamId);
+          const now = getCurrentCETDate();
+          const year = now.getFullYear();
+          const week = getISOWeekNumber(now);
+          const scheduleResult = am_getTeamSchedule(userEmail, teamId, year, week);
+          
+          results.push({
+            teamId: teamId,
+            success: true,
+            cached: ['teamData', 'roster', 'schedule']
+          });
+        } else {
+          results.push({ teamId: teamId, success: false, reason: 'Team not found' });
+        }
+      } catch (e) {
+        results.push({ teamId: teamId, success: false, reason: e.message });
+      }
+    }
+    
+    return createSuccessResponse({
+      results: results,
+      warmedCount: results.filter(r => r.success).length,
+      totalRequested: teamIds.length
+    }, `Warmed cache for ${results.filter(r => r.success).length} teams`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Enhanced checkForScheduleUpdates with delta sync support
+ * @param {string} teamId - Team to check
+ * @param {number} clientLastLoadTimestamp - Client's last known timestamp
+ * @return {Object} Enhanced change information
+ */
+function checkForScheduleUpdatesEnhanced(teamId, clientLastLoadTimestamp) {
+  const CONTEXT = "WebAppAPI.checkForScheduleUpdatesEnhanced";
+  try {
+    if (!teamId) {
+      return createErrorResponse("Team ID required.");
+    }
+    
+    // Use the new delta sync API
+    const deltaResult = api_getScheduleChanges(teamId, clientLastLoadTimestamp);
+    
+    if (!deltaResult.success) {
+      return deltaResult;
+    }
+    
+    // If no changes, return simple response
+    if (!deltaResult.hasChanges) {
+      return createSuccessResponse({
+        hasChanged: false,
+        serverTimestamp: deltaResult.serverTimestamp
+      });
+    }
+    
+    // Format response for existing frontend compatibility
+    const response = {
+      hasChanged: true,
+      serverTimestamp: deltaResult.serverTimestamp,
+      changeType: deltaResult.changeType,
+      changedBy: deltaResult.changedBy,
+      isOwnChange: deltaResult.isOwnChange
+    };
+    
+    // Add change-specific data
+    if (deltaResult.changes) {
+      response.changes = deltaResult.changes;
+    }
+    if (deltaResult.rosterChange) {
+      response.rosterChange = deltaResult.rosterChange;
+    }
+    
+    return createSuccessResponse(response);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * NEW FUNCTION
+ * Gets the 4-week schedule data for a single, specific team.
+ */
+function api_getScheduleForTeam(teamId) {
+  const CONTEXT = "WebAppAPI.api_getScheduleForTeam";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+
+    const allWeeksToFetch = getAllAvailableWeeks();
+    const firstWeek = allWeeksToFetch[0];
+    const lastWeek = allWeeksToFetch[3];
+
+    // This reuses our existing robust logic to get a schedule range
+    const scheduleResult = getTeamScheduleRange(activeUser.getEmail(), teamId, firstWeek.year, firstWeek.week, lastWeek.year, lastWeek.week);
+
+    return scheduleResult; // Return the whole success/error object
   } catch (e) {
     return handleError(e, CONTEXT);
   }

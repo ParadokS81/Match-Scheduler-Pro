@@ -31,8 +31,9 @@ function createMasterSheetStructure() {
     const steps = [
       { name: "Teams Sheet", func: () => _msm_createTeamsSheet(ss) }, 
       { name: "Players Sheet", func: () => _msm_createPlayersSheet(ss) },
-      { name: "System Cache Sheet", func: () => _msm_createSystemCacheSheet(ss) }, // <-- ADD THIS STEP
-      { name: "Player Index Sheet", func: () => _msm_createPlayerIndexSheet(ss) }, // NEW STEP
+      { name: "System Cache Sheet", func: () => _msm_createSystemCacheSheet(ss) },
+      { name: "Week Block Index Sheet", func: () => _msm_createWeekBlockIndexSheet(ss) },
+      { name: "Player Index Sheet", func: () => _msm_createPlayerIndexSheet(ss) },
       { name: "Master Sheet Properties", func: () => _msm_setupMasterSheetProperties() }
     ];
 
@@ -108,6 +109,67 @@ function _msm_createSystemCacheSheet(spreadsheet) {
   }
 }
 
+/**
+ * Creates the WEEK_BLOCK_INDEX sheet for fast week block lookups
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The target spreadsheet
+ * @returns {Object} Success/error response
+ */
+function _msm_createWeekBlockIndexSheet(spreadsheet) {
+  const CONTEXT = "MasterSheetManager._msm_createWeekBlockIndexSheet";
+  try {
+    const sheetName = BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME;
+    Logger.log(`${CONTEXT}: Creating or clearing ${sheetName} sheet...`);
+    
+    // Check if sheet exists
+    let indexSheet = spreadsheet.getSheetByName(sheetName);
+    if (indexSheet) {
+      // Clear existing content
+      indexSheet.clear();
+      Logger.log(`${CONTEXT}: Cleared existing ${sheetName} sheet`);
+    } else {
+      // Create new sheet
+      indexSheet = spreadsheet.insertSheet(sheetName);
+      Logger.log(`${CONTEXT}: Created new ${sheetName} sheet`);
+    }
+    
+    // Set up headers
+    const headers = ["TeamSheetName", "Year", "Week", "StartRow", "LastUpdated"];
+    indexSheet.getRange(1, 1, 1, headers.length)
+      .setValues([headers])
+      .setFontWeight('bold')
+      .setBackground('#f3f3f3');
+    
+    // Add rebuild timestamp in column F
+    indexSheet.getRange('F1')
+      .setValue(new Date().toISOString())
+      .setNote("Last Full Rebuild Timestamp")
+      .setFontWeight('normal')
+      .setBackground('#e8f4f8');
+    
+    // Set column widths for better readability
+    indexSheet.setColumnWidth(1, 200); // TeamSheetName
+    indexSheet.setColumnWidth(2, 60);  // Year
+    indexSheet.setColumnWidth(3, 60);  // Week
+    indexSheet.setColumnWidth(4, 80);  // StartRow
+    indexSheet.setColumnWidth(5, 150); // LastUpdated
+    
+    // Freeze header row
+    indexSheet.setFrozenRows(1);
+    
+    // Hide sheet from users
+    indexSheet.hideSheet();
+    
+    Logger.log(`✅ ${CONTEXT}: ${sheetName} sheet created, configured, and hidden.`);
+    return createSuccessResponse({ 
+      sheetName: sheetName,
+      created: true 
+    });
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
 function _msm_createPlayerIndexSheet(spreadsheet) {
   const CONTEXT = "MasterSheetManager._msm_createPlayerIndexSheet";
   try {
@@ -146,7 +208,7 @@ function _msm_createTeamsSheet(spreadsheet) {
     if (teamsSheet) { teamsSheet.clear(); } else { teamsSheet = spreadsheet.insertSheet(BLOCK_CONFIG.MASTER_SHEET.TEAMS_SHEET); }
     
     const tCols = BLOCK_CONFIG.MASTER_SHEET.TEAMS_COLUMNS;
-    const finalHeaders = ["TeamID", "TeamName", "Division", "LeaderEmail", "JoinCode", "CreatedDate", "LastActive", "MaxPlayers", "IsActive", "IsPublic", "PlayerCount", "PlayerList", "InitialsList", "AvailabilitySheetName", "LogoURL"];
+    const finalHeaders = ["TeamID", "TeamName", "Division", "LeaderEmail", "JoinCode", "CreatedDate", "LastActive", "MaxPlayers", "IsActive", "IsPublic", "PlayerCount", "PlayerList", "InitialsList", "AvailabilitySheetName", "LogoURL", "LastUpdatedTimestamp"];
     if (finalHeaders.length !== Object.keys(tCols).length) { return createErrorResponse(`Header length mismatch in ${CONTEXT}.`); }
 
     teamsSheet.getRange(1, 1, 1, finalHeaders.length).setValues([finalHeaders]).setFontWeight('bold').setBackground(BLOCK_CONFIG.COLORS.PRIMARY).setFontColor('white');
@@ -236,7 +298,10 @@ function _msm_createTeamTab(spreadsheet, availabilitySheetName, teamName) {
 function _msm_createTeamScheduleStructure(teamSheet, teamName) { 
   const CONTEXT = "MasterSheetManager._msm_createTeamScheduleStructure (Static Row 1 Headers)";
   try {
-    Logger.log(`${CONTEXT}: Setting up sheet structure for ${teamName} on sheet '${teamSheet.getName()}'`);
+    Logger.log(`[${CONTEXT}] Starting team schedule structure creation for ${teamName}...`);
+    
+    const indexEntries = []; // Collect entries for batch update
+    
     teamSheet.clear(); // Full clear to ensure clean slate
     teamSheet.clearConditionalFormatRules();
     
@@ -249,76 +314,97 @@ function _msm_createTeamScheduleStructure(teamSheet, teamName) {
     // B1, C1: Can be empty or "Year", "Month", "Week" if preferred above data cols
     headers[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR] = "Year"; // Col A if 0-indexed
     headers[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH] = "Month"; // Col B
-    headers[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK] = "Week #"; // Col C
-    
+    headers[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK] = "Week"; // Col C
     headers[BLOCK_CONFIG.LAYOUT.TIME_COLUMN] = "Time"; // Col D
     
-    const daysAbbr = BLOCK_CONFIG.LAYOUT.DAY_ABBREV; // Mon, Tue, ...
-    for(let i=0; i < daysAbbr.length; i++) {
-        headers[BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + i] = daysAbbr[i]; // E.g., E1="Mon", F1="Tue"
+    // Days of Week Headers (E-K)
+    const daysStartCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN;
+    for (let i = 0; i < BLOCK_CONFIG.LAYOUT.DAYS_PER_WEEK; i++) {
+      headers[daysStartCol + i] = BLOCK_CONFIG.LAYOUT.DAY_ABBREV[i];
     }
     
-    // Headers for the new "Team Block" section
-    const rosterBlockInitialStartCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + daysAbbr.length; // Column after Sunday
-    headers[rosterBlockInitialStartCol] = "Roster Attribute"; // Label Column (e.g., L1)
+    headerRow.setValues([headers]);
+    headerRow.setFontWeight('bold');
+    headerRow.setBackground(BLOCK_CONFIG.COLORS.SHEET.DAY_HEADER_BG);
+    headerRow.setFontColor(BLOCK_CONFIG.COLORS.SHEET.DAY_HEADER_FG);
     
-    const maxPlayers = BLOCK_CONFIG.TEAM_SETTINGS.MAX_PLAYERS_PER_TEAM;
-    for (let p = 0; p < maxPlayers; p++) {
-        headers[rosterBlockInitialStartCol + 1 + p] = `Player ${p + 1}`; // P1, P2...
-    }
-    headers[rosterBlockInitialStartCol + 1 + maxPlayers] = "Weekly Roster Changes"; // Changelog column
-
-    teamSheet.getRange(1, 1, 1, headers.length).setValues([headers])
-             .setFontWeight("bold")
-             .setBackground(BLOCK_CONFIG.COLORS.SHEET.DAY_HEADER_BG) // Using a consistent header color
-             .setFontColor(BLOCK_CONFIG.COLORS.SHEET.DAY_HEADER_FG)
-             .setHorizontalAlignment("center")
-             .setWrap(true);
-    
-    // Merge title cell A1:C1
-    teamSheet.getRange("A1:C1").mergeAcross();
-    teamSheet.getRange("A1").setHorizontalAlignment("left");
-
+    // Freeze Row 1 and first 4 columns
     teamSheet.setFrozenRows(1);
-    Logger.log(`${CONTEXT}: Static Row 1 headers created and frozen for '${teamSheet.getName()}'.`);
-
-    // --- Provision Initial Weekly Data Blocks (starting from Row 2) ---
-    const initialBlockStartRow = 2; // Data blocks start from row 2
-    const currentCetDate = getCurrentCETDate();
-    const initialYear = currentCetDate.getFullYear();
-    const initialWeekNum = getISOWeekNumber(currentCetDate);
-    const weeksToProvision = BLOCK_CONFIG.TEAM_SETTINGS.MAX_WEEKS_PER_TEAM || 4; 
-
-    let yearToProcess = initialYear;
-    let weekToProcess = initialWeekNum;
-    let blocksCreatedCount = 0;
-    let lastBlockEndY = initialBlockStartRow -1; // To calculate next block's start
-
-    for (let i = 0; i < weeksToProvision; i++) {
-      const nextBlockDataStartRow = lastBlockEndY + 1; 
-      const blockResult = createSingleWeekBlock(teamSheet, nextBlockDataStartRow, yearToProcess, weekToProcess);
-      
-      if (blockResult && blockResult.success && blockResult.endRow) { 
-        blocksCreatedCount++;
-        lastBlockEndY = blockResult.endRow; // endRow is the last data row of the created block
-      } else {
-        const errMsg = `Failed to create week block ${yearToProcess}-W${weekToProcess} for team ${teamName}. Result: ${JSON.stringify(blockResult)}`;
-        Logger.log(`❌ ${CONTEXT}: ERROR - ${errMsg}`);
-        return createErrorResponse(errMsg); 
-      }
-      
-      const mondayOfCurrentBlock = getMondayFromWeekNumberAndYear(yearToProcess, weekToProcess);
-      const nextMonday = new Date(mondayOfCurrentBlock);
-      nextMonday.setDate(mondayOfCurrentBlock.getDate() + 7);
-      yearToProcess = nextMonday.getFullYear();
-      weekToProcess = getISOWeekNumber(nextMonday);
+    teamSheet.setFrozenColumns(4);
+    
+    // Set column widths
+    teamSheet.setColumnWidth(1, 60); // Year
+    teamSheet.setColumnWidth(2, 60); // Month
+    teamSheet.setColumnWidth(3, 60); // Week
+    teamSheet.setColumnWidth(4, 80); // Time
+    
+    // Set day column widths
+    for (let i = 0; i < BLOCK_CONFIG.LAYOUT.DAYS_PER_WEEK; i++) {
+      teamSheet.setColumnWidth(daysStartCol + i + 1, 100);
     }
-    Logger.log(`✅ ${CONTEXT}: Initial ${blocksCreatedCount} data blocks provisioned for ${teamName} on '${teamSheet.getName()}'.`);
-
-    // NO SAMPLE AVAILABILITY DATA CREATED - Clean framework only
-
-    return createSuccessResponse({ teamName: teamName, blocksProvisioned: blocksCreatedCount, structure: "Static_Row1_Headers_Phase_1D_Vertical_Week_Blocks" });
-  } catch (e) { return handleError(e, CONTEXT); }
+    
+    // Create initial week blocks
+    const now = getCurrentCETDate();
+    const currentWeek = getISOWeekNumber(now);
+    const currentYear = now.getFullYear();
+    let lastBlockEndY = 1; // Start after header row
+    let blocksCreatedCount = 0;
+    
+    // Create blocks for current week + 3 future weeks
+    for (let weekOffset = 0; weekOffset < BLOCK_CONFIG.WEEK_BLOCK_INDEX.ACTIVE_WEEKS_WINDOW; weekOffset++) {
+      const weekToProcess = currentWeek + weekOffset;
+      const yearToProcess = currentYear + Math.floor((weekToProcess - 1) / 52);
+      const normalizedWeek = ((weekToProcess - 1) % 52) + 1;
+      
+      const nextBlockDataStartRow = lastBlockEndY + 1;
+      
+      const blockResult = createSingleWeekBlock(
+        teamSheet, 
+        nextBlockDataStartRow, 
+        yearToProcess, 
+        weekToProcess,
+        true // skipIndexUpdate = true for batching
+      );
+      
+      if (blockResult && blockResult.success && blockResult.endRow) {
+        blocksCreatedCount++;
+        lastBlockEndY = blockResult.endRow;
+        
+        // Collect for batch update
+        indexEntries.push({
+          sheetName: teamSheet.getName(),
+          year: yearToProcess,
+          weekNumber: weekToProcess,
+          startRow: nextBlockDataStartRow
+        });
+      } else {
+        Logger.log(`${CONTEXT}: Failed to create week block for week ${weekToProcess} of ${yearToProcess}`);
+      }
+    }
+    
+    // Batch update the index
+    if (indexEntries.length > 0) {
+      _batchUpdateWeekIndex(indexEntries);
+      Logger.log(`${CONTEXT}: Batch indexed ${indexEntries.length} weeks for ${teamName}`);
+    }
+    
+    // Add protection if configured
+    if (BLOCK_CONFIG.SETTINGS.AUTO_PROTECT_NEW_TEAMS) {
+      const protection = teamSheet.protect();
+      protection.setDescription(`Protected team sheet for ${teamName}`);
+      protection.removeEditors(protection.getEditors());
+      protection.addEditor(Session.getEffectiveUser());
+    }
+    
+    Logger.log(`✅ ${CONTEXT}: Created ${blocksCreatedCount} week blocks for ${teamName}`);
+    return createSuccessResponse({
+      sheetName: teamSheet.getName(),
+      blocksCreated: blocksCreatedCount
+    });
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
 }
 
 
@@ -363,7 +449,7 @@ function _msm_validateMasterSheetStructure() {
     
     allSheets.forEach(sheet => {
       if (sheet.getName().startsWith(BLOCK_CONFIG.MASTER_SHEET.TEAM_TAB_PREFIX)) {
-        const blocks = findAllWeekBlocks(sheet); 
+        const blocks = _scanSheetForAllWeekBlocks(sheet); 
         const firstBlockInfo = blocks.length > 0 ? validateBlockStructure(sheet, blocks[0].startRow) : {isValid: null, errors: ["No blocks found for validation"]};
         results.teamTabsInfo.push({
             name: sheet.getName(),

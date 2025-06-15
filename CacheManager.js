@@ -28,14 +28,59 @@ function _cache_updateTeamData(teamId) {
       return false;
     }
 
-    // === UPDATED: Use fast index lookup instead of slow full scan ===
-    const roster = getTeamRosterFromIndex(teamId).map(player => ({
-      displayName: player.displayName,
-      initials: player.initials,
-      role: player.role,
-      googleEmail: null, // Privacy: not storing email in cache
-      discordUsername: player.discordUsername
-    }));
+    // === HANDOVER TASK: Replace slow roster lookup with cache-first logic (Phase 1B)
+    // === CACHE-FIRST ROSTER LOOKUP ===
+    let roster = [];
+
+    // 1. Try cached players data first (fastest)
+    try {
+      const allPlayersResult = getAllPlayers(false, { teamId: teamId });
+      if (allPlayersResult.success && allPlayersResult.players) {
+        roster = allPlayersResult.players.map(player => {
+          const teamData = player.team1.teamId === teamId ? player.team1 : player.team2;
+          return {
+            displayName: player.displayName,
+            initials: teamData.initials,
+            role: teamData.role,
+            googleEmail: null, // Privacy: not storing email in cache
+            discordUsername: player.discordUsername || null
+          };
+        });
+        Logger.log(`${CONTEXT}: Used cached players data for team ${teamId} (${roster.length} players)`);
+      } else {
+        throw new Error("Cache miss or empty result");
+      }
+    } catch (cacheError) {
+      // 2. Fallback to PLAYER_INDEX (fast sheet read)
+      Logger.log(`${CONTEXT}: Cache miss for team ${teamId}, using PLAYER_INDEX fallback`);
+      try {
+        roster = getTeamRosterFromIndex(teamId).map(player => ({
+          displayName: player.displayName,
+          initials: player.initials,
+          role: player.role,
+          googleEmail: null, // Privacy: not storing email in cache
+          discordUsername: player.discordUsername || null
+        }));
+        Logger.log(`${CONTEXT}: Used PLAYER_INDEX for team ${teamId} (${roster.length} players)`);
+      } catch (indexError) {
+        // 3. Last resort: slow full scan
+        Logger.log(`${CONTEXT}: PLAYER_INDEX failed for team ${teamId}, using slow scan fallback`);
+        const slowResult = getAllPlayers(false, { teamId: teamId });
+        if (slowResult.success) {
+          roster = slowResult.players.map(player => {
+            const teamData = player.team1.teamId === teamId ? player.team1 : player.team2;
+            return {
+              displayName: player.displayName,
+              initials: teamData.initials,
+              role: teamData.role,
+              googleEmail: null,
+              discordUsername: player.discordUsername || null
+            };
+          });
+          Logger.log(`${CONTEXT}: Used slow scan for team ${teamId} (${roster.length} players)`);
+        }
+      }
+    }
     
     // Find the correct row in the cache sheet to update
     const teamIdsInData = cacheSheet.getRange('A2:A').getValues().flat();

@@ -23,6 +23,7 @@ function performDailyMaintenanceTasks() {
     
     try {
         ensureFutureWeekBlocksForAllActiveTeams();
+        autoSleepInactiveTeams();
         // Other daily tasks can be added here in the future
         // e.g., cleanupOldArchivedData(), sendSummaryReports(), etc.
     } catch (e) {
@@ -144,6 +145,69 @@ function ensureFutureWeekBlocksForAllActiveTeams() {
   }
 }
 
+/**
+ * Checks all active teams and puts to sleep any that have been inactive for 28+ days
+ * Designed to be run as part of the daily maintenance tasks
+ */
+function autoSleepInactiveTeams() {
+  const CONTEXT = "ScheduledTasks.autoSleepInactiveTeams";
+  Logger.log(`${CONTEXT}: Starting auto-sleep check for inactive teams`);
+  
+  try {
+    // Get all active teams
+    const teamsResult = getAllTeams(true); // onlyActive = true
+    if (!teamsResult.success || !teamsResult.teams) {
+      Logger.log(`${CONTEXT}: Could not retrieve active teams. Error: ${teamsResult.message}`);
+      return;
+    }
+    
+    const activeTeams = teamsResult.teams;
+    if (activeTeams.length === 0) {
+      Logger.log(`${CONTEXT}: No active teams found. Nothing to process.`);
+      return;
+    }
+    
+    Logger.log(`${CONTEXT}: Checking ${activeTeams.length} active teams for inactivity...`);
+    
+    // Current timestamp for comparison
+    const now = new Date();
+    let teamsProcessedCount = 0;
+    let teamsPutToSleepCount = 0;
+    
+    for (const team of activeTeams) {
+      teamsProcessedCount++;
+      
+      // Skip teams without a timestamp (shouldn't happen, but just in case)
+      if (!team.lastUpdatedTimestamp) {
+        Logger.log(`${CONTEXT}: Team ${team.teamId} (${team.teamName}) has no last updated timestamp. Skipping.`);
+        continue;
+      }
+      
+      // Calculate days since last activity
+      const lastUpdated = new Date(team.lastUpdatedTimestamp);
+      const daysSinceUpdate = Math.floor((now - lastUpdated) / (1000 * 60 * 60 * 24));
+      
+      // If inactive for 28+ days, put to sleep
+      if (daysSinceUpdate >= 28) {
+        Logger.log(`${CONTEXT}: Team ${team.teamId} (${team.teamName}) has been inactive for ${daysSinceUpdate} days. Putting to sleep.`);
+        
+        const sleepResult = putTeamToSleep(team.teamId);
+        if (sleepResult.success) {
+          teamsPutToSleepCount++;
+          Logger.log(`${CONTEXT}: Successfully put team ${team.teamId} (${team.teamName}) to sleep.`);
+        } else {
+          Logger.log(`${CONTEXT}: Failed to put team ${team.teamId} (${team.teamName}) to sleep. Error: ${sleepResult.message}`);
+        }
+      }
+    }
+    
+    Logger.log(`${CONTEXT}: Finished. Processed ${teamsProcessedCount} teams. Put ${teamsPutToSleepCount} teams to sleep.`);
+    
+  } catch (e) {
+    Logger.log(`ERROR in ${CONTEXT}: ${e.message}\nStack: ${e.stack}`);
+  }
+}
+
 // ... (Trigger management functions as before) ...
 
 // =============================================================================
@@ -224,4 +288,150 @@ function listAllProjectTriggers() {
             // Future: more detailed clock trigger info if API allows
         }
     });
+}
+
+// =============================================================================
+// WEEKLY PROVISIONING AND INDEX VALIDATION
+// =============================================================================
+
+/**
+ * Weekly scheduled task: Provision new weeks and validate index
+ * Should be triggered weekly via time-based trigger
+ */
+function weeklyProvisionAndValidate() {
+  const CONTEXT = "ScheduledTasks.weeklyProvisionAndValidate";
+  try {
+    Logger.log(`${CONTEXT}: Starting weekly provisioning...`);
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const allNewEntries = [];
+    let teamsProcessed = 0;
+    let weeksCreated = 0;
+    
+    // Get all active teams
+    const teamsResult = getAllTeams(false);
+    if (!teamsResult.success || !teamsResult.teams) {
+      return createErrorResponse("Failed to get teams list");
+    }
+    
+    // Process each team
+    for (const team of teamsResult.teams) {
+      if (!team.availabilitySheetName) continue;
+      
+      const teamSheet = ss.getSheetByName(team.availabilitySheetName);
+      if (!teamSheet) continue;
+      
+      teamsProcessed++;
+      
+      // Find the last week block
+      const blocks = _scanSheetForAllWeekBlocks(teamSheet);
+      if (blocks.length === 0) {
+        Logger.log(`${CONTEXT}: No blocks found for ${team.teamName}`);
+        continue;
+      }
+      
+      // Get the last block
+      const lastBlock = blocks[blocks.length - 1];
+      
+      // Calculate next week
+      const lastWeekDate = getMondayFromWeekNumberAndYear(
+        lastBlock.year, 
+        lastBlock.weekNumber
+      );
+      lastWeekDate.setDate(lastWeekDate.getDate() + 7);
+      
+      const nextYear = lastWeekDate.getFullYear();
+      const nextWeek = getISOWeekNumber(lastWeekDate);
+      
+      // Check if we need to create this week
+      const currentDate = getCurrentCETDate();
+      const weeksAhead = Math.floor(
+        (lastWeekDate - currentDate) / (7 * 24 * 60 * 60 * 1000)
+      );
+      
+      if (weeksAhead <= 3) {
+        // Create the week block
+        const newBlockRow = lastBlock.endRow + 1;
+        const blockResult = createSingleWeekBlock(
+          teamSheet,
+          newBlockRow,
+          nextYear,
+          nextWeek,
+          true // skipIndexUpdate for batching
+        );
+        
+        if (blockResult && blockResult.success) {
+          weeksCreated++;
+          allNewEntries.push({
+            sheetName: teamSheet.getName(),
+            year: nextYear,
+            weekNumber: nextWeek,
+            startRow: newBlockRow
+          });
+          
+          Logger.log(`${CONTEXT}: Created week ${nextYear}-W${nextWeek} for ${team.teamName}`);
+        }
+      }
+    }
+    
+    // Batch update index
+    if (allNewEntries.length > 0) {
+      _batchUpdateWeekIndex(allNewEntries);
+      Logger.log(`${CONTEXT}: Batch indexed ${allNewEntries.length} new weeks`);
+    }
+    
+    // Validate index integrity
+    Logger.log(`${CONTEXT}: Starting index validation...`);
+    const validationResult = _validateWeekBlockIndex();
+    
+    if (!validationResult.isValid && BLOCK_CONFIG.WEEK_BLOCK_INDEX.AUTO_REBUILD_ON_ERROR) {
+      Logger.log(`${CONTEXT}: Validation failed, rebuilding index...`);
+      const rebuildResult = rebuildWeekBlockIndex();
+      
+      return createSuccessResponse({
+        teamsProcessed: teamsProcessed,
+        weeksCreated: weeksCreated,
+        indexValidation: validationResult,
+        rebuildPerformed: true,
+        rebuildResult: rebuildResult
+      });
+    }
+    
+    Logger.log(`${CONTEXT}: ✅ Complete. Created ${weeksCreated} weeks, index valid`);
+    
+    return createSuccessResponse({
+      teamsProcessed: teamsProcessed,
+      weeksCreated: weeksCreated,
+      indexValidation: validationResult,
+      rebuildPerformed: false
+    });
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Sets up the weekly trigger for provisioning and validation
+ * Run this once manually from the script editor
+ */
+function setupWeeklyTrigger() {
+  // Remove any existing triggers for this function
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'weeklyProvisionAndValidate') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // Create new weekly trigger
+  // Runs every Monday at 2 AM
+  ScriptApp.newTrigger('weeklyProvisionAndValidate')
+    .timeBased()
+    .everyWeeks(1)
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(2)
+    .create();
+    
+  Logger.log('Weekly trigger set up successfully');
 }

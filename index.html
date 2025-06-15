@@ -1,23 +1,57 @@
 <!DOCTYPE html>
 <html>
-<?!= include('frontend/01-head-content') ?>
-<body class="bg-slate-900 text-slate-300">
-  <?!= include('frontend/02-body-structure') ?>
-  <?!= include('frontend/03-modals') ?>
-  
+  <head>
+    <?!= include('frontend2/01-head-content.html') ?>
+  </head>
+  <body class="bg-slate-900 text-slate-300">
+
+    <?!= include('frontend2/02-body-structure.html') ?>
+    <?!= include('frontend2/03-modals.html') ?>
+
+    <script>
+      window.userContextFromServer = <?!= typeof userContextFromServer !== 'undefined' ? JSON.stringify(userContextFromServer) : 'null' ?>;
+    </script>
+
+    <?!= include('frontend2/services/GridSelectionService.js') ?>
+    <?!= include('frontend2/services/TemplateService.js') ?>
+    <?!= include('frontend2/components/UserProfile.js') ?>
+    <?!= include('frontend2/components/WeekNavigation.js') ?>
+    <?!= include('frontend2/components/MatchFilters.js') ?>
+    <?!= include('frontend2/components/TeamInfo.js') ?>
+    <?!= include('frontend2/components/AvailabilityGrid.js') ?>
+    <?!= include('frontend2/components/FavoritesList.js') ?>
+    <?!= include('frontend2/components/GridTools.js') ?>
+    <?!= include('frontend2/components/BrowseTeams.js') ?>
+
+    <?!= include('frontend2/main/App.js') ?>
+
   <script>
-    // Server variables injected by template - MUST BE IN MAIN FILE
-    window.userContextFromServer = <?!= typeof userContextFromServer !== 'undefined' ? JSON.stringify(userContextFromServer) : 'null' ?>;
-    window.BLOCK_CONFIG_CLIENT = <?!= typeof BLOCK_CONFIG !== 'undefined' ? JSON.stringify(BLOCK_CONFIG) : 'null' ?>;
-    window.ROLES_CLIENT = <?!= typeof ROLES !== 'undefined' ? JSON.stringify(ROLES) : 'null' ?>;
+  console.log("=== Component Load Check ===");
+  console.log("GridSelectionService:", typeof GridSelectionService);
+  console.log("TemplateService:", typeof TemplateService);
+  console.log("UserProfile:", typeof UserProfile);
+  console.log("WeekNavigation:", typeof WeekNavigation);
+  console.log("MatchFilters:", typeof MatchFilters);
+  console.log("TeamInfo:", typeof TeamInfo);
+  console.log("AvailabilityGrid:", typeof AvailabilityGrid);
+  console.log("FavoritesList:", typeof FavoritesList);
+  console.log("GridTools:", typeof GridTools);
+  console.log("BrowseTeams:", typeof BrowseTeams);
+  console.log("App:", typeof App);
+  console.log("=== End Component Check ===");
   </script>
-  
-  <?!= include('frontend/scripts/01-init') ?>
-  <?!= include('frontend/scripts/02a-cache-navigation') ?>
-  <?!= include('frontend/scripts/02b-grid-selection') ?>
-  <?!= include('frontend/scripts/02c-team-ui') ?>
-  <?!= include('frontend/scripts/02d-schedule-availability') ?>
-  <?!= include('frontend/scripts/03-templates') ?>
-  <?!= include('frontend/scripts/04-events') ?>
-</body>
+
+    <script>
+      window.onload = function() {
+        // Pass the pre-loaded data directly into the App's init function
+        if (window.userContextFromServer) {
+          App.init(window.userContextFromServer);
+        } else {
+          console.error("Critical Error: Initial user context from server is missing.");
+          // You could display an error message to the user here
+        }
+      };
+    </script>
+
+  </body>
 </html>

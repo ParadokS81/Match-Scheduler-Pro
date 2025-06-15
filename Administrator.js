@@ -149,9 +149,13 @@ function _as_performLeaderSheetUpdates(details, newLeaderUserEmail, teamsSheet, 
 function core_adminSetTeamLeader(teamId, newLeaderEmail, requestingUserEmail) {
   const CONTEXT = "Administrator.core_adminSetTeamLeader";
   try {
-    // Permission check
-    if (!userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_TEAMS)) {
-      return createErrorResponse("Permission denied: Only administrators can set team leaders.");
+    // Permission check - allow both admins and current team leaders
+    const isGlobalAdmin = userHasPermission(requestingUserEmail, PERMISSIONS.MANAGE_ALL_TEAMS);
+    const isCurrentLeader = isUserTeamLeader(requestingUserEmail, teamId);
+
+    // The user can proceed if they are a global admin OR the current leader of this specific team
+    if (!isGlobalAdmin && !isCurrentLeader) {
+      return createErrorResponse("Permission denied: You must be an Administrator or the current Team Leader to perform this action.");
     }
     
     // Validate inputs

@@ -1,0 +1,187 @@
+<script>
+// GridSelectionService.js
+const GridSelectionService = (function() {
+    // Private state
+    let _selectedCells = new Set();
+    let _lastClickedCell = null;
+    let _isShiftPressed = false;
+    let _selectionChangeCallbacks = [];
+
+    // Track shift key state
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Shift') _isShiftPressed = true;
+    });
+    
+    document.addEventListener('keyup', (e) => {
+        if (e.key === 'Shift') _isShiftPressed = false;
+    });
+
+    // Private methods
+    function _notifySelectionChange() {
+        const count = _selectedCells.size;
+        _selectionChangeCallbacks.forEach(callback => callback(count));
+    }
+
+    function _createCellKey(row, col, gridId) {
+        return `${row},${col},${gridId}`;
+    }
+
+    function _parseCellKey(cellKey) {
+        const parts = cellKey.split(',');
+        return {
+            row: parseInt(parts[0]),
+            col: parseInt(parts[1]),
+            gridId: parts[2]
+        };
+    }
+
+    // Public API
+    function init() {
+        console.log("GridSelectionService Initialized.");
+        clear(); // Start fresh
+    }
+
+    function toggleCell(row, col, gridId) {
+        const cellKey = _createCellKey(row, col, gridId);
+        
+        if (_isShiftPressed && _lastClickedCell) {
+            // Check if shift-selecting within same grid
+            if (_lastClickedCell.gridId === gridId) {
+                // Rectangle selection within same grid
+                selectRectangle(
+                    _lastClickedCell.row, _lastClickedCell.col,
+                    row, col, gridId
+                );
+            } else {
+                // Cross-grid shift+click: just toggle individual cells
+                if (_selectedCells.has(cellKey)) {
+                    _selectedCells.delete(cellKey);
+                } else {
+                    _selectedCells.add(cellKey);
+                }
+            }
+        } else {
+            // Regular toggle
+            if (_selectedCells.has(cellKey)) {
+                _selectedCells.delete(cellKey);
+            } else {
+                _selectedCells.add(cellKey);
+            }
+        }
+        
+        _lastClickedCell = { row, col, gridId };
+        _notifySelectionChange();
+        return _selectedCells.has(cellKey);
+    }
+
+    function selectRectangle(startRow, startCol, endRow, endCol, gridId) {
+        const minRow = Math.min(startRow, endRow);
+        const maxRow = Math.max(startRow, endRow);
+        const minCol = Math.min(startCol, endCol);
+        const maxCol = Math.max(startCol, endCol);
+        
+        // Add all cells in rectangle
+        for (let row = minRow; row <= maxRow; row++) {
+            for (let col = minCol; col <= maxCol; col++) {
+                const cellKey = _createCellKey(row, col, gridId);
+                _selectedCells.add(cellKey);
+            }
+        }
+        
+        _notifySelectionChange();
+    }
+
+    function selectTimeRow(timeIndex, gridId) {
+        // Select all days (0-6) for a specific time slot
+        for (let col = 0; col < 7; col++) {
+            const cellKey = _createCellKey(timeIndex, col, gridId);
+            _selectedCells.add(cellKey);
+        }
+        _notifySelectionChange();
+    }
+
+    function selectDayColumn(dayIndex, gridId) {
+        // Need to know how many time slots there are
+        // This will be provided by the grid when it calls this method
+        const gridElement = document.getElementById(`availability-grid-${gridId}`);
+        if (!gridElement) return;
+        
+        const rows = gridElement.querySelectorAll('tbody tr');
+        for (let row = 0; row < rows.length; row++) {
+            const cellKey = _createCellKey(row, dayIndex, gridId);
+            _selectedCells.add(cellKey);
+        }
+        _notifySelectionChange();
+    }
+
+    function selectAll() {
+        // Select all cells in both visible grids
+        ['week1', 'week2'].forEach(gridId => {
+            const gridElement = document.getElementById(`availability-grid-${gridId}`);
+            if (!gridElement) return;
+            
+            const rows = gridElement.querySelectorAll('tbody tr');
+            rows.forEach((row, timeIndex) => {
+                for (let col = 0; col < 7; col++) {
+                    const cellKey = _createCellKey(timeIndex, col, gridId);
+                    _selectedCells.add(cellKey);
+                }
+            });
+        });
+        
+        _notifySelectionChange();
+    }
+
+    function clear() {
+        _selectedCells.clear();
+        _lastClickedCell = null;
+        _notifySelectionChange();
+    }
+
+    function getSelection() {
+        return Array.from(_selectedCells);
+    }
+
+    function getSelectionByGrid() {
+        const byGrid = {
+            week1: [],
+            week2: []
+        };
+        
+        _selectedCells.forEach(cellKey => {
+            const parsed = _parseCellKey(cellKey);
+            if (byGrid[parsed.gridId]) {
+                byGrid[parsed.gridId].push({
+                    row: parsed.row,
+                    col: parsed.col
+                });
+            }
+        });
+        
+        return byGrid;
+    }
+
+    function isSelected(row, col, gridId) {
+        const cellKey = _createCellKey(row, col, gridId);
+        return _selectedCells.has(cellKey);
+    }
+
+    function onSelectionChange(callback) {
+        _selectionChangeCallbacks.push(callback);
+    }
+
+    return {
+        init,
+        toggleCell,
+        selectRectangle,
+        selectTimeRow,
+        selectDayColumn,
+        selectAll,
+        clear,
+        getSelection,
+        getSelectionByGrid,
+        isSelected,
+        onSelectionChange
+    };
+})();
+</script>

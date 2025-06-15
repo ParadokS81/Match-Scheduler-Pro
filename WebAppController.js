@@ -1,21 +1,15 @@
 /**
- * Schedule Manager - Web App Controller (Phase 1C Enhanced / 1D Refactor)
- *
- * @version 1.2.0 (2025-06-10) - Added SSR endpoint
- * @version 1.1.3 (2025-06-02) - FIXED: Recursion issues in controller functions
- * @version 1.1.2 (2025-05-31) - Corrected all calls to global functions for direct invocation.
- * @version 1.1.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
- *
+ * Schedule Manager - Web App Controller (Delta Sync Update)
+ * 
+ * @version 2.1.0 (2025-06-12) - Added delta sync controller endpoints
+ * @version 2.0.0 (2025-06-10) - Previous version baseline
+ * 
  * Description: Web app entry point with user-based routing.
  * Uses centralized ROLES/PERMISSIONS and functions from PermissionManager.js.
- *
+ * 
  * CHANGELOG:
- * 1.2.0 - 2025-06-10 - Added getPreRenderedScheduleGrids for server-side rendering.
- * 1.1.3 - 2025-06-02 - FIXED: Renamed 6 controller functions to prevent infinite recursion (getUserStatus, updateUserDisplayName, refreshUserSession, getSystemInfo, logFrontendError, checkForScheduleUpdates)
- * 1.1.2 - 2025-05-31 - Ensured all functions from WebAppAPI.js and other managers are called directly (e.g., getUserContext() instead of WebAppAPI.getUserContext()).
- * 1.1.1 - 2025-05-30 - Updated doGet to use WebAppAPI.getUserContext for template data.
- * 1.1.0 - 2025-05-30 - Phase 1C: Added logo management endpoints and enhanced team data
- * 1.0.0 - 2025-05-29 - Initial implementation
+ * 2.1.0 - 2025-06-12 - Added batchCheckForChanges, warmFavoriteTeamsCache, updated checkForScheduleUpdates.
+ * 2.0.0 - 2025-06-10 - Previous version baseline
  */
 
 // ROLES and PERMISSIONS are now global constants defined in PermissionManager.js
@@ -150,6 +144,15 @@ function joinTeamWithCode(joinCode, initials) {
 }
 
 
+function kickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+    const activeUser = getActiveUser();
+    if (!activeUser) {
+        return createErrorResponse("Authentication required.");
+    }
+    // This now correctly calls the renamed function in WebAppAPI.js
+    return api_kickPlayerAndRegenerateCode(teamId, playerToKickEmail); 
+}
+
 // --- Availability ---
 function getTeamSchedule(teamId, year, weekNumber) { return apiGetTeamSchedule(teamId, year, weekNumber); } // DIRECT CALL to global function from WebAppAPI.js
 function updatePlayerAvailabilityForMultipleWeeks(teamId, action, weeklyPayloads) {
@@ -262,7 +265,8 @@ function handleLogFrontendError(errorMessage, context) { return logFrontendError
 
 // FIXED: Renamed to prevent recursion
 function handleCheckForScheduleUpdates(teamId, clientLastLoadTimestampMillis) {
-  return checkForScheduleUpdates(teamId, clientLastLoadTimestampMillis); // Calls global WebAppAPI.checkForScheduleUpdates
+  // Use enhanced delta sync version
+  return checkForScheduleUpdates(teamId, clientLastLoadTimestampMillis);
 }
 
 // Add these functions to the WebAppController.js file
@@ -400,4 +404,209 @@ function getTeamLogoAsBase64(teamId) {
 
 function getMultipleTeamLogosAsBase64(teamIds) {
   return imageService_getMultipleTeamLogosAsBase64(teamIds);
+}
+
+// === HANDOVER TASK: Add delta sync controller endpoints (Phase 2A)
+
+// =============================================================================
+// DELTA SYNC CONTROLLER ENDPOINTS
+// =============================================================================
+
+/**
+ * Batch check multiple teams for changes - used for dashboard views
+ * @param {Array<Object>} teamChecks - Array of {teamId, lastTimestamp} objects
+ * @return {Object} Batch results showing which teams have changes
+ */
+function batchCheckForChanges(teamChecks) {
+  return api_batchCheckForChanges(teamChecks);
+}
+
+/**
+ * Pre-warm cache for user's favorite teams to improve performance
+ * @param {Array<string>} teamIds - Array of team IDs to pre-cache
+ * @return {Object} Results of cache warming operation
+ */
+function warmFavoriteTeamsCache(teamIds) {
+  return api_warmCacheForTeams(teamIds);
+}
+
+/**
+ * Check for schedule updates since last load
+ * @param {string} teamId - Team to check
+ * @param {number} clientLastLoadTimestamp - Client's last known timestamp
+ * @return {Object} Change information
+ */
+/**
+ * Check for schedule updates since last load. Now calls the detailed delta API.
+ * @param {string} teamId - Team to check for changes
+ * @param {number} clientLastLoadTimestamp - Client's last known timestamp (milliseconds)
+ * @return {Object} Detailed change information from delta API
+ */
+function checkForScheduleUpdates(teamId, clientLastLoadTimestamp) {
+  // Direct passthrough to the new, more powerful delta API function
+  return api_getScheduleChanges(teamId, clientLastLoadTimestamp);
+}
+
+/**
+ * Batch check multiple teams for changes
+ * @param {Array<Object>} teamChecks - Array of {teamId, lastTimestamp}
+ * @return {Object} Batch results
+ */
+function batchCheckForChanges(teamChecks) {
+  return api_batchCheckForChanges(teamChecks);
+}
+
+/**
+ * Warm cache for favorite teams
+ * @param {Array<string>} teamIds - Team IDs to pre-cache
+ * @return {Object} Warming results
+ */
+function warmFavoriteTeamsCache(teamIds) {
+  return api_warmCacheForTeams(teamIds);
+}
+
+/**
+ * Get roster for a specific team (fast index lookup)
+ * @param {string} teamId - Team ID
+ * @return {Object} Roster data
+ */
+function getRosterForTeam(teamId) {
+  const CONTEXT = "WebAppController.getRosterForTeam";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    const userEmail = activeUser.getEmail();
+    
+    // Check permissions - must be team member or admin
+    const isAdmin = userHasPermission(userEmail, PERMISSIONS.MANAGE_ALL_TEAMS);
+    const isMember = isPlayerOnTeam(userEmail, teamId);
+    
+    if (!isAdmin && !isMember) {
+      return createErrorResponse("Permission denied to view team roster.");
+    }
+    
+    const roster = getTeamRosterFromIndex(teamId);
+    return createSuccessResponse({ roster: roster });
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// === HANDOVER TASK: Add admin cache management functions (Phase 2A)
+
+// =============================================================================
+// CACHE MANAGEMENT ENDPOINTS
+// =============================================================================
+
+/**
+ * Invalidate all caches for a specific team
+ * Admin only function for troubleshooting
+ * @param {string} teamId - Team ID to clear caches for
+ * @return {Object} Clear result
+ */
+function adminClearTeamCaches(teamId) {
+  const CONTEXT = "WebAppController.adminClearTeamCaches";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    const userEmail = activeUser.getEmail();
+    if (!userHasPermission(userEmail, PERMISSIONS.MANAGE_ALL_TEAMS)) {
+      return createErrorResponse("Admin permission required.");
+    }
+    
+    // Clear multiple cache types
+    const cache = CacheService.getScriptCache();
+    const keysToRemove = [
+      `teamData_${teamId}_incInactive_true`,
+      `teamData_${teamId}_incInactive_false`,
+      `teamMeta_${teamId}`
+    ];
+    
+    // Get team data for sheet name
+    const teamData = getTeamData(teamId);
+    if (teamData && teamData.availabilitySheetName) {
+      // Clear schedule caches for this team
+      for (let year = 2024; year <= 2026; year++) {
+        for (let week = 1; week <= 53; week++) {
+          keysToRemove.push(`scheduleData_${teamData.availabilitySheetName}_${year}_W${week}`);
+        }
+      }
+      
+      // Clear cell changes
+      keysToRemove.push(`cellChanges_${teamId}_${teamData.availabilitySheetName}`);
+    }
+    
+    cache.removeAll(keysToRemove);
+    
+    return createSuccessResponse({
+      teamId: teamId,
+      keysCleared: keysToRemove.length
+    }, `Cleared ${keysToRemove.length} cache entries for team ${teamId}`);
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+/**
+ * Force rebuild player index
+ * Admin only function for maintenance
+ * @return {Object} Rebuild result
+ */
+function adminRebuildPlayerIndex() {
+  const CONTEXT = "WebAppController.adminRebuildPlayerIndex";
+  try {
+    const activeUser = getActiveUser();
+    if (!activeUser) return createErrorResponse("Authentication required.");
+    
+    const userEmail = activeUser.getEmail();
+    if (!userHasPermission(userEmail, PERMISSIONS.MANAGE_ALL_PLAYERS)) {
+      return createErrorResponse("Admin permission required to rebuild player index.");
+    }
+    
+    Logger.log(`${CONTEXT}: Admin ${userEmail} initiated player index rebuild`);
+    
+    const result = rebuildPlayerIndex();
+    
+    if (result.success) {
+      // Show success message
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `Index rebuilt: ${result.indexEntriesCreated} entries created`,
+        'Player Index Rebuilt',
+        10
+      );
+    }
+    
+    return result;
+    
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+// Add this function to WebAppController.js
+function handleGetTeamData(teamId) { // The public name can be simpler
+    return api_getTeamData(teamId);
+}
+
+/**
+ * NEW FUNCTION for WebAppController.js
+ * This is the public entry point that your frontend UI calls.
+ * Its only job is to receive the request and pass it to the backend API logic.
+ */
+function handleKickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
+  const activeUser = getActiveUser();
+  if (!activeUser) {
+    return createErrorResponse("Authentication required.");
+  }
+  
+  // This securely calls the function in WebAppAPI.js that does the actual work.
+  return api_kickPlayerAndRegenerateCode(teamId, playerToKickEmail);
+}
+
+function getScheduleForTeam(teamId) {
+    return api_getScheduleForTeam(teamId);
 }

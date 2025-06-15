@@ -14,7 +14,7 @@ const WEEK_BLOCK_DATA_CACHE_EXPIRATION_SECONDS = 300;
 // =============================================================================
 // WEEK BLOCK CREATION & MANAGEMENT
 // =============================================================================
-function createSingleWeekBlock(sheet, startRow, year, weekNumber) {
+function createSingleWeekBlock(sheet, startRow, year, weekNumber, skipIndexUpdate = false) {
   const CONTEXT = "WeekBlockManager.createSingleWeekBlock (v1.4.2 with logging)";
   Logger.log(`[${CONTEXT}] ENTERED. Sheet: '${sheet.getName()}', StartRow: ${startRow}, Year: ${year}, Week: ${weekNumber}`);
   try {
@@ -121,6 +121,12 @@ function createSingleWeekBlock(sheet, startRow, year, weekNumber) {
          .setBorder(true, true, true, true, true, true, BLOCK_CONFIG.COLORS.LIGHT_GRAY, SpreadsheetApp.BorderStyle.SOLID_THIN);
     
     Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. Block created for ${year}-W${weekNumber}.`);
+    
+    // Update index unless skipped (for batching)
+    if (!skipIndexUpdate) {
+      _updateWeekIndex(sheet.getName(), year, weekNumber, startRow);
+    }
+    
     return {
       success: true, 
       year: year, weekNumber: weekNumber, month: monthName,
@@ -131,176 +137,6 @@ function createSingleWeekBlock(sheet, startRow, year, weekNumber) {
   } catch (e) {
     Logger.log(`❌ Error in ${CONTEXT} on sheet ${sheet.getName()} for ${year}-W${weekNumber}: ${e.message}\n${e.stack}`);
     return handleError(e, CONTEXT); // Global from Configuration.js
-  }
-}
-
-function ensureWeekExists(sheet, year, weekNumber) {
-  const CONTEXT = "WeekBlockManager.ensureWeekExists (with logging)";
-  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, Year: ${year}, Week: ${weekNumber}`);
-  try {
-    if (!sheet) {
-        Logger.log(`[${CONTEXT}] ERROR: Sheet object is required.`);
-        throw new Error("Sheet object is required.");
-    }
-    Logger.log(`[${CONTEXT}] Calling findWeekBlock...`);
-    // This calls findWeekBlock from this same WeekBlockManager.js file (which is fine)
-    const existingBlock = findWeekBlock(sheet, year, weekNumber); 
-    
-    if (existingBlock) {
-      Logger.log(`[${CONTEXT}] Block found for ${year}-W${weekNumber}. Returning existing.`);
-      return { ...existingBlock, created: false, success: true };
-    }
-    
-    Logger.log(`[${CONTEXT}] Block NOT found for ${year}-W${weekNumber}. Calling getNextAvailableBlockPosition...`);
-    // This calls getNextAvailableBlockPosition from this same WeekBlockManager.js file (which is fine)
-    const insertDataRow = getNextAvailableBlockPosition(sheet); 
-    Logger.log(`[${CONTEXT}] Next available row: ${insertDataRow}. Calling createSingleWeekBlock...`);
-    // This calls createSingleWeekBlock from this same WeekBlockManager.js file (which is fine)
-    const newBlock = createSingleWeekBlock(sheet, insertDataRow, year, weekNumber); 
-    Logger.log(`[${CONTEXT}] createSingleWeekBlock result: ${JSON.stringify(newBlock)}`);
-    
-    if (newBlock && newBlock.success) {
-        Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. New block created for ${year}-W${weekNumber}.`);
-    } else {
-        Logger.log(`[${CONTEXT}] EXITED WITH FAILURE. Block creation failed for ${year}-W${weekNumber}.`);
-    }
-    return { ...newBlock, created: (newBlock && newBlock.success), success: (newBlock && newBlock.success) };
-  } catch (e) {
-    Logger.log(`❌ Error in ${CONTEXT} for sheet ${sheet.getName()}, ${year}-W${weekNumber}: ${e.message}`);
-    return { year: year, weekNumber: weekNumber, created: false, success: false, message: e.message };
-  }
-}
-
-function findWeekBlock(sheet, yearToFind, weekNumberToFind) {
-  const CONTEXT = "WeekBlockManager.findWeekBlock (with logging)";
-  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, Year: ${yearToFind}, Week: ${weekNumberToFind}`);
-  try {
-    // This calls findAllWeekBlocks from this same WeekBlockManager.js file (which is fine)
-    const allBlocks = findAllWeekBlocks(sheet); 
-    const foundBlock = allBlocks.find(block => 
-      block.year === yearToFind && block.weekNumber === weekNumberToFind
-    );
-    if (foundBlock) {
-        Logger.log(`[${CONTEXT}] EXITED. Block found: ${JSON.stringify(foundBlock)}`);
-    } else {
-        Logger.log(`[${CONTEXT}] EXITED. Block NOT found.`);
-    }
-    return foundBlock || null;
-  } catch (e) {
-    Logger.log(`Error in ${CONTEXT} for sheet ${sheet.getName()}, ${yearToFind}-W${weekNumberToFind}: ${e.message}`);
-    return null;
-  }
-}
-
-function findAllWeekBlocks(sheet) {
-  const CONTEXT = "WeekBlockManager.findAllWeekBlocks (Static Headers, with logging)";
-  let iterationCount = 0; 
-  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}`);
-  try {
-    const blocks = [];
-    const lastRowWithContent = sheet.getLastRow();
-    const dataScanStartRow = 2; 
-    
-    if (lastRowWithContent < dataScanStartRow) {
-        Logger.log(`[${CONTEXT}] No content rows to scan (lastRowWithContent: ${lastRowWithContent}). Returning empty blocks.`);
-        return blocks;
-    }
-
-    const yearColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR + 1;
-    const monthColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH + 1;
-    const weekColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK + 1;
-    
-    const numSheetDataRows = lastRowWithContent - dataScanStartRow + 1;
-    if (numSheetDataRows <= 0) {
-        Logger.log(`[${CONTEXT}] Calculated numSheetDataRows is ${numSheetDataRows}. Returning empty blocks.`);
-        return blocks;
-    }
-
-    Logger.log(`[${CONTEXT}] Reading metadata from range: R${dataScanStartRow}C${yearColIdx} to R${dataScanStartRow + numSheetDataRows -1}C${weekColIdx}`);
-    const metaRange = sheet.getRange(dataScanStartRow, yearColIdx, numSheetDataRows, weekColIdx - yearColIdx + 1);
-    const metaValues = metaRange.getValues();
-    const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
-    Logger.log(`[${CONTEXT}] numTimeSlots: ${numTimeSlots}, numSheetDataRows from sheet: ${numSheetDataRows}, metaValues length: ${metaValues.length}`);
-
-    for (let r = 0; r < metaValues.length; r++) { 
-      iterationCount++;
-      if (iterationCount > 500 && (iterationCount % 100 === 0)) { 
-          Logger.log(`[${CONTEXT}] WARNING: Iteration ${iterationCount} in loop. Checking row index r=${r} of metaValues.`);
-          if (iterationCount > 2000) { 
-            Logger.log(`[${CONTEXT}] CRITICAL WARNING: Exceeded 2000 iterations. Aborting findAllWeekBlocks for safety.`);
-            break;
-          }
-      }
-      
-      const currentYear = metaValues[r][0]; 
-      const currentWeekText = metaValues[r][2]; 
-
-      if (typeof currentYear === 'number' && currentYear >= 2000 && 
-          typeof currentWeekText === 'string' && currentWeekText.toUpperCase().startsWith('W')) {
-        
-        const actualSheetRowForDataStart = dataScanStartRow + r; 
-        const isAlreadyFound = blocks.some(b => 
-            actualSheetRowForDataStart >= b.startRow && actualSheetRowForDataStart <= b.endRow);
-        
-        if (isAlreadyFound) {
-          continue;
-        }
-
-        const weekNumber = parseInt(currentWeekText.substring(1));
-        if (!isNaN(weekNumber) && weekNumber > 0 && weekNumber <= 53) {
-          let isFullBlockPattern = true;
-          if (r + numTimeSlots > metaValues.length) { 
-              isFullBlockPattern = false; 
-          } else {
-              for(let i_block = 1; i_block < numTimeSlots; i_block++) { 
-                  if(metaValues[r+i_block][0] !== currentYear || 
-                     String(metaValues[r+i_block][2]).toUpperCase() !== currentWeekText.toUpperCase()) {
-                      isFullBlockPattern = false;
-                      break;
-                  }
-              }
-          }
-          
-          if (isFullBlockPattern) {
-            blocks.push({
-              year: currentYear,
-              weekNumber: weekNumber,
-              month: metaValues[r][1], 
-              startRow: actualSheetRowForDataStart, 
-              endRow: actualSheetRowForDataStart + numTimeSlots - 1 
-            });
-            r += numTimeSlots - 1; 
-          }
-        }
-      }
-    } 
-
-    blocks.sort((a, b) => (a.year - b.year) || (a.weekNumber - b.weekNumber));
-    Logger.log(`[${CONTEXT}] EXITED. Found ${blocks.length} blocks after ${iterationCount} metaValues row checks (total rows scanned from sheet: ${numSheetDataRows}).`);
-    return blocks;
-  } catch (e) {
-    Logger.log(`Error in ${CONTEXT} on sheet ${sheet.getName()}: ${e.message}\nStack: ${e.stack}`);
-    return [];
-  }
-}
-
-function getNextAvailableBlockPosition(sheet) {
-  const CONTEXT = "WeekBlockManager.getNextAvailableBlockPosition (Static Headers, with logging)";
-  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}`);
-  try {
-    // This calls findAllWeekBlocks from this same file
-    const allBlocks = findAllWeekBlocks(sheet); 
-    if (allBlocks.length === 0) {
-      Logger.log(`[${CONTEXT}] No existing blocks found. Next position is 2.`);
-      return 2; 
-    }
-    const lastBlock = allBlocks[allBlocks.length - 1];
-    const nextPosition = lastBlock.endRow + 1; 
-    Logger.log(`[${CONTEXT}] Last block ends at ${lastBlock.endRow}. Next position is ${nextPosition}.`);
-    return nextPosition;
-  } catch (e) {
-    Logger.log(`Error in ${CONTEXT} on sheet ${sheet.getName()}: ${e.message}. Defaulting to row 2.`);
-    return 2; 
   }
 }
 
@@ -402,41 +238,563 @@ function readWeekBlockData(sheet, weekBlock) {
   }
 }
 
-function validateBlockStructure(sheet, startDataRow) { 
-  const CONTEXT = "WeekBlockManager.validateBlockStructure (Static Headers, with logging)";
-  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, StartDataRow: ${startDataRow}`);
+function ensureWeekExists(sheet, year, weekNumber) {
+  const CONTEXT = "WeekBlockManager.ensureWeekExists (with logging)";
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}, Year: ${year}, Week: ${weekNumber}`);
   try {
-    // ... (rest of function, assuming it calls Configuration.js functions directly if needed)
-    // ... For brevity, I'll assume internal logic is fine or uses Apps Script globals.
-    // ... This function was less likely to cause recursion itself.
-    const validation = { isValid: true, errors: [], warnings: [] };
-    const metadataValues = sheet.getRange(startDataRow, 1, 1, 3).getValues()[0];
-    const year = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR];
-    const month = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH];
-    const weekText = metadataValues[BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK];
+    if (!sheet) {
+        Logger.log(`[${CONTEXT}] ERROR: Sheet object is required.`);
+        throw new Error("Sheet object is required.");
+    }
+    Logger.log(`[${CONTEXT}] Calling findWeekBlock...`);
+    // This calls findWeekBlock from this same WeekBlockManager.js file (which is fine)
+    const existingBlock = findWeekBlock(sheet, year, weekNumber); 
+    
+    if (existingBlock) {
+      Logger.log(`[${CONTEXT}] Block found for ${year}-W${weekNumber}. Returning existing.`);
+      return { ...existingBlock, created: false, success: true };
+    }
+    
+    Logger.log(`[${CONTEXT}] Block NOT found for ${year}-W${weekNumber}. Calling getNextAvailableBlockPosition...`);
+    // This calls getNextAvailableBlockPosition from this same WeekBlockManager.js file (which is fine)
+    const insertDataRow = getNextAvailableBlockPosition(sheet); 
+    Logger.log(`[${CONTEXT}] Next available row: ${insertDataRow}. Calling createSingleWeekBlock...`);
+    // This calls createSingleWeekBlock from this same WeekBlockManager.js file (which is fine)
+    const newBlock = createSingleWeekBlock(sheet, insertDataRow, year, weekNumber); 
+    Logger.log(`[${CONTEXT}] createSingleWeekBlock result: ${JSON.stringify(newBlock)}`);
+    
+    if (newBlock && newBlock.success) {
+        Logger.log(`[${CONTEXT}] EXITED SUCCESSFULLY. New block created for ${year}-W${weekNumber}.`);
+    } else {
+        Logger.log(`[${CONTEXT}] EXITED WITH FAILURE. Block creation failed for ${year}-W${weekNumber}.`);
+    }
+    return { ...newBlock, created: (newBlock && newBlock.success), success: (newBlock && newBlock.success) };
+  } catch (e) {
+    Logger.log(`❌ Error in ${CONTEXT} for sheet ${sheet.getName()}, ${year}-W${weekNumber}: ${e.message}`);
+    return { year: year, weekNumber: weekNumber, created: false, success: false, message: e.message };
+  }
+}
 
-    if (typeof year !== 'number' || year < 2000) {
-      validation.isValid = false; validation.errors.push(`Invalid Year at data row ${startDataRow}, Col A.`);
+/**
+ * Finds a specific week block using three-tier lookup strategy
+ * Tier 1: Script Cache (fastest)
+ * Tier 2: Index Sheet (fast)
+ * Tier 3: Full Scan (slow, self-healing)
+ */
+function findWeekBlock(sheet, yearToFind, weekNumberToFind) {
+  const CONTEXT = "WeekBlockManager.findWeekBlock";
+  const sheetName = sheet.getName();
+  
+  Logger.log(`[${CONTEXT}] Looking for ${yearToFind}-W${weekNumberToFind} in ${sheetName}`);
+  
+  try {
+    // TIER 1: Check Script Cache
+    const cache = CacheService.getScriptCache();
+    const cacheKey = `${BLOCK_CONFIG.WEEK_BLOCK_INDEX.CACHE_PREFIX}${sheetName}_${yearToFind}_W${weekNumberToFind}`;
+    
+    const cachedLocation = cache.get(cacheKey);
+    if (cachedLocation) {
+      Logger.log(`${CONTEXT}: ✅ Cache HIT`);
+      return JSON.parse(cachedLocation);
     }
-    if (typeof month !== 'string' || month.length < 3) {
-      validation.isValid = false; validation.errors.push(`Invalid Month at data row ${startDataRow}, Col B.`);
+    
+    // TIER 2: Check Index Sheet
+    Logger.log(`${CONTEXT}: Cache MISS, checking index sheet`);
+    const indexResult = _findWeekInIndexSheet(sheetName, yearToFind, weekNumberToFind);
+    
+    if (indexResult) {
+      Logger.log(`${CONTEXT}: ✅ Found in index`);
+      // Cache for next time
+      cache.put(cacheKey, JSON.stringify(indexResult), BLOCK_CONFIG.WEEK_BLOCK_INDEX.CACHE_TTL);
+      return indexResult;
     }
-    if (typeof weekText !== 'string' || !weekText.toUpperCase().startsWith('W') || isNaN(parseInt(weekText.substring(1)))) {
-      validation.isValid = false; validation.errors.push(`Invalid Week format at data row ${startDataRow}, Col C (expected "W##").`);
-    }
-    const timeCol = BLOCK_CONFIG.LAYOUT.TIME_COLUMN + 1;
-    const expectedTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS;
-    const actualTimeSlots = sheet.getRange(startDataRow, timeCol, expectedTimeSlots.length, 1).getValues();
-    for (let i = 0; i < expectedTimeSlots.length; i++) {
-      if (String(actualTimeSlots[i][0]).trim() !== expectedTimeSlots[i]) {
-        validation.warnings.push(`Time slot mismatch at data row ${startDataRow + i}, Col D: expected '${expectedTimeSlots[i]}', found '${actualTimeSlots[i][0]}'.`);
-        validation.isValid = false; 
+    
+    // TIER 3: Fall back to full scan
+    Logger.log(`${CONTEXT}: Not in index, performing full scan`);
+    const allBlocks = _scanSheetForAllWeekBlocks(sheet);
+    
+    for (const block of allBlocks) {
+      if (block.year === yearToFind && block.weekNumber === weekNumberToFind) {
+        Logger.log(`${CONTEXT}: ✅ Found via scan, updating index`);
+        
+        // Self-healing: Update index for next time
+        _updateWeekIndex(sheetName, yearToFind, weekNumberToFind, block.startRow);
+        
+        // Cache the result
+        cache.put(cacheKey, JSON.stringify(block), BLOCK_CONFIG.WEEK_BLOCK_INDEX.CACHE_TTL);
+        
+        return block;
       }
     }
-    Logger.log(`[${CONTEXT}] EXITED. Validation result: ${JSON.stringify(validation)}`);
-    return validation;
+    
+    Logger.log(`${CONTEXT}: ❌ Week block not found`);
+    return null;
+    
   } catch (e) {
-    Logger.log(`Error in ${CONTEXT} for sheet ${sheet.getName()}, data row ${startDataRow}: ${e.message}`);
-    return { isValid: false, errors: [`Validation exception: ${e.message}`], warnings: [] };
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+    // Fall back to scan on any error
+    return _scanSheetForAllWeekBlocks(sheet)
+      .find(block => block.year === yearToFind && block.weekNumber === weekNumberToFind) || null;
+  }
+}
+
+function _scanSheetForAllWeekBlocks(sheet) {
+  const CONTEXT = "WeekBlockManager._scanSheetForAllWeekBlocks (Static Headers, with logging)";
+  let iterationCount = 0; 
+  Logger.log(`[${CONTEXT}] ENTERED. Sheet: ${sheet.getName()}`);
+  try {
+    const blocks = [];
+    const lastRowWithContent = sheet.getLastRow();
+    const dataScanStartRow = 2; 
+    
+    if (lastRowWithContent < dataScanStartRow) {
+        Logger.log(`[${CONTEXT}] No content rows to scan (lastRowWithContent: ${lastRowWithContent}). Returning empty blocks.`);
+        return blocks;
+    }
+
+    const yearColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.YEAR + 1;
+    const monthColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.MONTH + 1;
+    const weekColIdx = BLOCK_CONFIG.LAYOUT.METADATA_COLUMNS.WEEK + 1;
+    
+    const numSheetDataRows = lastRowWithContent - dataScanStartRow + 1;
+    if (numSheetDataRows <= 0) {
+        Logger.log(`[${CONTEXT}] Calculated numSheetDataRows is ${numSheetDataRows}. Returning empty blocks.`);
+        return blocks;
+    }
+
+    Logger.log(`[${CONTEXT}] Reading metadata from range: R${dataScanStartRow}C${yearColIdx} to R${dataScanStartRow + numSheetDataRows -1}C${weekColIdx}`);
+    const metaRange = sheet.getRange(dataScanStartRow, yearColIdx, numSheetDataRows, weekColIdx - yearColIdx + 1);
+    const metaValues = metaRange.getValues();
+    const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
+    Logger.log(`[${CONTEXT}] numTimeSlots: ${numTimeSlots}, numSheetDataRows from sheet: ${numSheetDataRows}, metaValues length: ${metaValues.length}`);
+
+    for (let r = 0; r < metaValues.length; r++) { 
+      iterationCount++;
+      if (iterationCount > 500 && (iterationCount % 100 === 0)) { 
+          Logger.log(`[${CONTEXT}] WARNING: Iteration ${iterationCount} in loop. Checking row index r=${r} of metaValues.`);
+          if (iterationCount > 2000) { 
+            Logger.log(`[${CONTEXT}] CRITICAL WARNING: Exceeded 2000 iterations. Aborting _scanSheetForAllWeekBlocks for safety.`);
+            break;
+          }
+      }
+      
+      const currentYear = metaValues[r][0]; 
+      const currentWeekText = metaValues[r][2]; 
+
+      if (typeof currentYear === 'number' && currentYear >= 2000 && 
+          typeof currentWeekText === 'string' && currentWeekText.toUpperCase().startsWith('W')) {
+        
+        const actualSheetRowForDataStart = dataScanStartRow + r; 
+        const isAlreadyFound = blocks.some(b => 
+            actualSheetRowForDataStart >= b.startRow && actualSheetRowForDataStart <= b.endRow);
+        
+        if (isAlreadyFound) {
+          continue;
+        }
+
+        const weekNumber = parseInt(currentWeekText.substring(1));
+        if (!isNaN(weekNumber) && weekNumber > 0 && weekNumber <= 53) {
+          let isFullBlockPattern = true;
+          if (r + numTimeSlots > metaValues.length) { 
+              isFullBlockPattern = false; 
+          } else {
+              for(let i_block = 1; i_block < numTimeSlots; i_block++) { 
+                  if(metaValues[r+i_block][0] !== currentYear || 
+                     String(metaValues[r+i_block][2]).toUpperCase() !== currentWeekText.toUpperCase()) {
+                      isFullBlockPattern = false;
+                      break;
+                  }
+              }
+          }
+          
+          if (isFullBlockPattern) {
+            blocks.push({
+              year: currentYear,
+              weekNumber: weekNumber,
+              month: metaValues[r][1], 
+              startRow: actualSheetRowForDataStart, 
+              endRow: actualSheetRowForDataStart + numTimeSlots - 1 
+            });
+            r += numTimeSlots - 1; 
+          }
+        }
+      }
+    } 
+
+    blocks.sort((a, b) => (a.year - b.year) || (a.weekNumber - b.weekNumber));
+    Logger.log(`[${CONTEXT}] EXITED. Found ${blocks.length} blocks after ${iterationCount} metaValues row checks (total rows scanned from sheet: ${numSheetDataRows}).`);
+    return blocks;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT} on sheet ${sheet.getName()}: ${e.message}\nStack: ${e.stack}`);
+    return [];
+  }
+}
+
+/**
+ * Looks up a week block in the index sheet (Tier 2)
+ * @private
+ */
+function _findWeekInIndexSheet(sheetName, year, weekNumber) {
+  const CONTEXT = "WeekBlockManager._findWeekInIndexSheet";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Index sheet not found`);
+      return null;
+    }
+    
+    const lastRow = indexSheet.getLastRow();
+    if (lastRow <= 1) {
+      Logger.log(`${CONTEXT}: Index sheet is empty`);
+      return null;
+    }
+    
+    // Get all index data at once for efficiency
+    const indexData = indexSheet.getRange(1, 1, lastRow, 5).getValues();
+    
+    // Search for matching entry (skip header row)
+    for (let i = 1; i < indexData.length; i++) {
+      if (indexData[i][0] === sheetName && 
+          indexData[i][1] === year && 
+          indexData[i][2] === weekNumber) {
+        
+        // Verify the referenced sheet still exists (lazy cleanup)
+        const targetSheet = ss.getSheetByName(sheetName);
+        if (!targetSheet) {
+          // Sheet was archived/renamed - remove stale entry
+          Logger.log(`${CONTEXT}: Removing stale index entry for ${sheetName} at row ${i + 1}`);
+          indexSheet.deleteRow(i + 1);
+          return null;
+        }
+        
+        // Calculate end row based on standard time slots
+        const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
+        const startRow = indexData[i][3];
+        
+        return {
+          year: year,
+          weekNumber: weekNumber,
+          startRow: startRow,
+          endRow: startRow + numTimeSlots - 1
+        };
+      }
+    }
+    
+    Logger.log(`${CONTEXT}: ❌ Week block not found`);
+    return null;
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Updates the week index sheet (Tier 2)
+ * @private
+ */
+function _updateWeekIndex(sheetName, year, weekNumber, startRow) {
+  const CONTEXT = "WeekBlockManager._updateWeekIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Index sheet not found`);
+      return;
+    }
+    
+    const lastRow = indexSheet.getLastRow();
+    if (lastRow <= 1) {
+      Logger.log(`${CONTEXT}: Index sheet is empty`);
+      indexSheet.appendRow([sheetName, year, weekNumber, startRow]);
+      return;
+    }
+    
+    // Get all index data at once for efficiency
+    const indexData = indexSheet.getRange(1, 1, lastRow, 5).getValues();
+    
+    // Search for matching entry (skip header row)
+    for (let i = 1; i < indexData.length; i++) {
+      if (indexData[i][0] === sheetName && 
+          indexData[i][1] === year && 
+          indexData[i][2] === weekNumber) {
+        
+        // Update existing entry
+        indexSheet.getRange(i + 1, 4).setValue(startRow);
+        return;
+      }
+    }
+    
+    // No existing entry found, append new row
+    indexSheet.appendRow([sheetName, year, weekNumber, startRow]);
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+  }
+}
+
+/**
+ * Batch updates the week index sheet for multiple blocks
+ * @private
+ */
+function _batchUpdateWeekIndex(sheetName, blocks) {
+  const CONTEXT = "WeekBlockManager._batchUpdateWeekIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Index sheet not found`);
+      return;
+    }
+    
+    // Get all existing index data
+    const lastRow = indexSheet.getLastRow();
+    const indexData = lastRow > 1 ? 
+      indexSheet.getRange(2, 1, lastRow - 1, 4).getValues() : [];
+    
+    // Prepare batch updates
+    const updates = [];
+    const newRows = [];
+    
+    blocks.forEach(block => {
+      const existingIndex = indexData.findIndex(row => 
+        row[0] === sheetName && 
+        row[1] === block.year && 
+        row[2] === block.weekNumber
+      );
+      
+      if (existingIndex === -1) {
+        // New entry
+        newRows.push([sheetName, block.year, block.weekNumber, block.startRow]);
+      } else {
+        // Update existing
+        const rowToUpdate = existingIndex + 2; // +2 for header and 0-based index
+        updates.push({
+          range: indexSheet.getRange(rowToUpdate, 4, 1, 1),
+          value: block.startRow
+        });
+      }
+    });
+    
+    // Apply updates in batch
+    if (updates.length > 0) {
+      updates.forEach(update => {
+        update.range.setValue(update.value);
+      });
+    }
+    
+    // Append new rows in batch
+    if (newRows.length > 0) {
+      indexSheet.getRange(lastRow + 1, 1, newRows.length, 4).setValues(newRows);
+    }
+    
+    Logger.log(`${CONTEXT}: Updated ${updates.length} entries, added ${newRows.length} new entries`);
+    
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+  }
+}
+
+/**
+ * Gets all week blocks for a team from the index sheet
+ * @private
+ */
+function _getWeekBlocksForTeamFromIndex(sheetName) {
+  const CONTEXT = "WeekBlockManager._getWeekBlocksForTeamFromIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Index sheet not found`);
+      return [];
+    }
+    
+    const lastRow = indexSheet.getLastRow();
+    if (lastRow <= 1) {
+      Logger.log(`${CONTEXT}: Index sheet is empty`);
+      return [];
+    }
+    
+    // Get all index data at once
+    const indexData = indexSheet.getRange(1, 1, lastRow, 4).getValues();
+    
+    // Filter and map entries for this sheet
+    const blocks = indexData
+      .slice(1) // Skip header row
+      .filter(row => row[0] === sheetName)
+      .map(row => ({
+        year: row[1],
+        weekNumber: row[2],
+        startRow: row[3],
+        endRow: row[3] + BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length - 1
+      }))
+      .sort((a, b) => (a.year - b.year) || (a.weekNumber - b.weekNumber));
+    
+    Logger.log(`${CONTEXT}: Found ${blocks.length} blocks for sheet ${sheetName}`);
+    return blocks;
+    
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+    return [];
+  }
+}
+
+/**
+ * Validates the week block index sheet against actual data
+ * @return {Object} Validation results with error rate and details
+ */
+function _validateWeekBlockIndex() {
+  const CONTEXT = "WeekBlockManager._validateWeekBlockIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    if (!indexSheet) {
+      Logger.log(`${CONTEXT}: Index sheet not found`);
+      return { success: false, message: "Index sheet not found" };
+    }
+
+    const results = {
+      totalEntries: 0,
+      errorCount: 0,
+      errors: [],
+      errorRate: 0
+    };
+
+    // Get all team sheets
+    const allSheets = ss.getSheets();
+    const teamSheets = allSheets.filter(s => 
+      s.getName().startsWith(BLOCK_CONFIG.MASTER_SHEET.TEAM_TAB_PREFIX)
+    );
+
+    // Scan each team sheet
+    for (const sheet of teamSheets) {
+      const sheetName = sheet.getName();
+      Logger.log(`${CONTEXT}: Validating ${sheetName}`);
+      
+      // Get actual blocks from sheet
+      const actualBlocks = _scanSheetForAllWeekBlocks(sheet);
+      
+      // Get indexed blocks for this sheet
+      const indexedBlocks = _getWeekBlocksForTeamFromIndex(sheetName);
+      
+      // Compare counts
+      if (actualBlocks.length !== indexedBlocks.length) {
+        results.errors.push(`${sheetName}: Block count mismatch. Actual: ${actualBlocks.length}, Indexed: ${indexedBlocks.length}`);
+        results.errorCount++;
+      }
+      
+      // Compare each block
+      for (const actual of actualBlocks) {
+        results.totalEntries++;
+        const indexed = indexedBlocks.find(b => 
+          b.year === actual.year && 
+          b.weekNumber === actual.weekNumber
+        );
+        
+        if (!indexed) {
+          results.errors.push(`${sheetName}: Missing index for ${actual.year}-W${actual.weekNumber}`);
+          results.errorCount++;
+        } else if (indexed.startRow !== actual.startRow) {
+          results.errors.push(`${sheetName}: Row mismatch for ${actual.year}-W${actual.weekNumber}. Actual: ${actual.startRow}, Indexed: ${indexed.startRow}`);
+          results.errorCount++;
+        }
+      }
+    }
+    
+    // Calculate error rate
+    results.errorRate = results.totalEntries > 0 ? 
+      results.errorCount / results.totalEntries : 1;
+    
+    Logger.log(`${CONTEXT}: Validation complete. Error rate: ${results.errorRate}`);
+    return {
+      success: true,
+      ...results,
+      needsRebuild: results.errorRate >= BLOCK_CONFIG.WEEK_BLOCK_INDEX.VALIDATION_ERROR_THRESHOLD
+    };
+    
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * Rebuilds the entire week block index from scratch
+ * @return {Object} Result of the rebuild operation
+ */
+function rebuildWeekBlockIndex() {
+  const CONTEXT = "WeekBlockManager.rebuildWeekBlockIndex";
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Get or create index sheet
+    let indexSheet = ss.getSheetByName(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+    if (!indexSheet) {
+      indexSheet = ss.insertSheet(BLOCK_CONFIG.WEEK_BLOCK_INDEX.SHEET_NAME);
+      indexSheet.getRange(1, 1, 1, 4).setValues([["TeamSheetName", "Year", "WeekNumber", "StartRow"]]);
+    } else {
+      // Clear existing data but keep header
+      const lastRow = indexSheet.getLastRow();
+      if (lastRow > 1) {
+        indexSheet.getRange(2, 1, lastRow - 1, 4).clearContent();
+      }
+    }
+    
+    // Get all team sheets
+    const allSheets = ss.getSheets();
+    const teamSheets = allSheets.filter(s => 
+      s.getName().startsWith(BLOCK_CONFIG.MASTER_SHEET.TEAM_TAB_PREFIX)
+    );
+    
+    let totalBlocks = 0;
+    const newEntries = [];
+    
+    // Scan each team sheet
+    for (const sheet of teamSheets) {
+      const sheetName = sheet.getName();
+      Logger.log(`${CONTEXT}: Processing ${sheetName}`);
+      
+      const blocks = _scanSheetForAllWeekBlocks(sheet);
+      totalBlocks += blocks.length;
+      
+      // Add each block to new entries
+      blocks.forEach(block => {
+        newEntries.push([
+          sheetName,
+          block.year,
+          block.weekNumber,
+          block.startRow
+        ]);
+      });
+    }
+    
+    // Batch write all entries
+    if (newEntries.length > 0) {
+      indexSheet.getRange(2, 1, newEntries.length, 4).setValues(newEntries);
+    }
+    
+    // Clear any related cache entries
+    const cache = CacheService.getScriptCache();
+    if (cache) {
+      try {
+        // Note: We can't selectively remove entries, but they'll expire
+        Logger.log(`${CONTEXT}: Cache entries will expire naturally`);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Cache warning: ${e.message}`);
+      }
+    }
+    
+    Logger.log(`${CONTEXT}: Rebuild complete. Indexed ${totalBlocks} blocks from ${teamSheets.length} sheets`);
+    return createSuccessResponse({
+      sheetsProcessed: teamSheets.length,
+      blocksIndexed: totalBlocks
+    }, `Week block index rebuilt successfully with ${totalBlocks} blocks from ${teamSheets.length} sheets`);
+    
+  } catch (e) {
+    Logger.log(`Error in ${CONTEXT}: ${e.message}`);
+    return createErrorResponse(`Failed to rebuild week block index: ${e.message}`);
   }
 }

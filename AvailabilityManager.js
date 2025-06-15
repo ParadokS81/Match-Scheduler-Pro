@@ -1,5 +1,6 @@
 /**
  * Schedule Manager - Availability Manager (Web App Edition - Phase 1D)
+ * @version 1.4.0 (2025-06-12) - Added delta sync cache functions for real-time change tracking
  * @version 1.3.1 (2025-06-02) - Corrected all inter-file function calls to be direct global calls.
  * @version 1.3.0 (2025-05-31) - Added cache invalidation for readWeekBlockData.
  * @version 1.2.1 (2025-05-30) - Phase 1D Refactor (Permissions Updated)
@@ -93,10 +94,17 @@ function availabilityManager_updatePlayerAvailability_SERVICE(userEmail, teamId,
         applyAvailabilityColors(teamSheet, updateResultData.modifiedCellRefs); 
       }
       // Assumes updateTeam is global from TeamDataManager.js, getCurrentTimestamp from Configuration.js
-      updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); 
+      updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+      
+      // Update the team's last updated timestamp
+      _tdm_touchTeamTimestamp(teamId);
 
-      // Assumes findAllWeekBlocks is global from WeekBlockManager.js
-      const allBlocksOnSheet = findAllWeekBlocks(teamSheet);
+      // Try index first, fall back to scan if needed
+      let allBlocksOnSheet = _getWeekBlocksForTeamFromIndex(teamSheet.getName());
+      if (allBlocksOnSheet.length === 0) {
+        Logger.log(`${CONTEXT}: No blocks in index, falling back to scan`);
+        allBlocksOnSheet = _scanSheetForAllWeekBlocks(teamSheet);
+      }
       const invalidatedBlockKeys = new Set();
 
       for (const cellRef of updateResultData.modifiedCellRefs) {
@@ -126,54 +134,75 @@ function availabilityManager_updatePlayerAvailability_SERVICE(userEmail, teamId,
 }
 
 function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(userEmail, teamId, action, weeklyPayloads) {
-    const CONTEXT = "AvailabilityManager.updatePlayerAvailabilityForMultipleWeeks_SERVICE_BATCHED"; // Note new context name
-        try {
+    const CONTEXT = "AvailabilityManager.updatePlayerAvailabilityForMultipleWeeks_SERVICE_BATCHED";
+    try {
         // 1. Initial Authorizations and User/Team Data Setup (remains the same)
-        const authResult = authorizeAvailabilityUpdate(userEmail, teamId); //
+        const authResult = authorizeAvailabilityUpdate(userEmail, teamId);
         if (!authResult.hasPermission) {
-            return createErrorResponse(authResult.reason, { permissionDenied: true }); //
+            return createErrorResponse(authResult.reason, { permissionDenied: true });
         }
-        const userTeams = getUserTeams(userEmail); //
+        const userTeams = getUserTeams(userEmail);
         const teamMembership = userTeams.find(team => team.teamId === teamId);
         if (!teamMembership) {
-            return createErrorResponse("You are not currently listed as a member of this team."); //
+            return createErrorResponse("You are not currently listed as a member of this team.");
         }
         const userInitials = teamMembership.initials;
-        if (!userInitials || !isValidInitials(userInitials)) { //
-             return createErrorResponse("Invalid or missing initials for this team. Please set them in your player profile for this team."); //
+        if (!userInitials || !isValidInitials(userInitials)) {
+             return createErrorResponse("Invalid or missing initials for this team. Please set them in your player profile for this team.");
         }
         const ss = SpreadsheetApp.getActiveSpreadsheet();
-        const teamDataObject = getTeamData(teamId); //
+        const teamDataObject = getTeamData(teamId);
         if (!teamDataObject || !teamDataObject.availabilitySheetName) {
-            return createErrorResponse("Team data or availability sheet name not found."); //
+            return createErrorResponse("Team data or availability sheet name not found.");
         }
         const teamSheet = ss.getSheetByName(teamDataObject.availabilitySheetName);
         if (!teamSheet) {
-            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`); //
+            return createErrorResponse(`Team schedule sheet "${teamDataObject.availabilitySheetName}" not found.`);
+        }
+
+        // Check if team is sleeping and wake it up if needed
+        if (!teamDataObject.isActive) {
+            Logger.log(`${CONTEXT}: Team ${teamId} is sleeping. Attempting to wake it up.`);
+            
+            const wakeUpResult = wakeUpTeam(teamId);
+            if (!wakeUpResult.success) {
+                return createErrorResponse(`Cannot update availability - team is sleeping and could not be awakened: ${wakeUpResult.message}`);
+            }
+            
+            Logger.log(`${CONTEXT}: Team ${teamId} was successfully awakened.`);
+            
+            // Refresh team data after wake-up
+            teamDataObject = getTeamData(teamId);
+            if (!teamDataObject) {
+                return createErrorResponse("Team data could not be retrieved after wake-up.");
+            }
         }
 
         let overallCellsModifiedCount = 0;
         let overallInvalidCellsCount = 0;
         const overallModifiedSheetCellReferences = [];
 
+        // === NEW: Track cell changes for delta sync ===
+        const cellChanges = [];
+
         // Wrap the entire multi-week processing in a single withProtectionBypass
-        const batchUpdateResult = withProtectionBypass(() => { //
+        const batchUpdateResult = withProtectionBypass(() => {
             let anyModificationInAnyWeek = false;
 
             for (const weeklyData of weeklyPayloads) {
                 const { year, weekNumber, selections } = weeklyData;
                 if (!selections || selections.length === 0) continue;
 
-                const weekBlock = findWeekBlock(teamSheet, year, weekNumber); //
+                const weekBlock = findWeekBlock(teamSheet, year, weekNumber);
                 if (!weekBlock) {
                     Logger.log(`${CONTEXT}: Week block ${year}-W${weekNumber} not found. Skipping ${selections.length} selections.`);
                     overallInvalidCellsCount += selections.length;
                     continue;
                 }
 
-                const blockStartSheetRow = weekBlock.startRow; //
-                const daysStartSheetCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1; //
-                const numTimeSlotsInBlock = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length; //
+                const blockStartSheetRow = weekBlock.startRow;
+                const daysStartSheetCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1;
+                const numTimeSlotsInBlock = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
                 const numDaysInBlock = 7;
 
                 let minVisualRow = selections[0].visualRow;
@@ -216,26 +245,54 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
 
                         if (action === "add") {
                             if (!tempNewInitialsArray.includes(ucUserInitials)) {
-                                tempNewInitialsArray.push(ucUserInitials); tempNewInitialsArray.sort(); modifiedThisCell = true;
+                                tempNewInitialsArray.push(ucUserInitials);
+                                tempNewInitialsArray.sort();
+                                modifiedThisCell = true;
                             }
                         } else if (action === "remove") {
                             const initialIndex = tempNewInitialsArray.indexOf(ucUserInitials);
                             if (initialIndex > -1) {
-                                tempNewInitialsArray.splice(initialIndex, 1); modifiedThisCell = true;
+                                tempNewInitialsArray.splice(initialIndex, 1);
+                                modifiedThisCell = true;
                             }
                         }
+
                         if (modifiedThisCell) {
-                            newValues[arrayRow][arrayCol] = tempNewInitialsArray.join(", ");
+                            const newCellValue = tempNewInitialsArray.join(", ");
+                            newValues[arrayRow][arrayCol] = newCellValue;
                             cellsModifiedThisWeek++;
+                            
+                            const sheetRow = blockStartSheetRow + sel.visualRow;
+                            const sheetCol = daysStartSheetCol + sel.visualCol;
+                            
+                            // === FIXED: Store week context with cell reference ===
                             overallModifiedSheetCellReferences.push({
-                                row: blockStartSheetRow + sel.visualRow, col: daysStartSheetCol + sel.visualCol
+                                row: sheetRow,
+                                col: sheetCol,
+                                year: year,              // Store year
+                                weekNumber: weekNumber,  // Store week number
+                                visualRow: sel.visualRow,
+                                visualCol: sel.visualCol
+                            });
+                            
+                            // === NEW: Track this cell change ===
+                            cellChanges.push({
+                                year: year,
+                                week: weekNumber,
+                                row: sheetRow,
+                                col: sheetCol,
+                                visualRow: sel.visualRow,  // Relative to grid
+                                visualCol: sel.visualCol,   // Relative to grid
+                                oldValue: currentText,
+                                newValue: newCellValue,
+                                action: action,
+                                initials: ucUserInitials
                             });
                         }
-                    } else {
-                        if (sel.visualRow < 0 || sel.visualRow >= numTimeSlotsInBlock || sel.visualCol < 0 || sel.visualCol >= numDaysInBlock) {
-                            Logger.log(`${CONTEXT}: Sel (${sel.visualRow},${sel.visualCol}) for ${year}-W${weekNumber} out of block bounds.`);
-                            invalidCellsThisWeek++;
-                        }
+                    }
+                    if (sel.visualRow < 0 || sel.visualRow >= numTimeSlotsInBlock || sel.visualCol < 0 || sel.visualCol >= numDaysInBlock) {
+                        Logger.log(`${CONTEXT}: Sel (${sel.visualRow},${sel.visualCol}) for ${year}-W${weekNumber} out of block bounds.`);
+                        invalidCellsThisWeek++;
                     }
                 }
                 if (cellsModifiedThisWeek > 0) {
@@ -245,37 +302,44 @@ function availabilityManager_updatePlayerAvailabilityForMultipleWeeks_SERVICE(us
                 overallCellsModifiedCount += cellsModifiedThisWeek;
                 overallInvalidCellsCount += invalidCellsThisWeek;
                 if (cellsModifiedThisWeek > 0) {
-                    _am_invalidateScheduleCacheForBlock(teamSheet.getName(), year, weekNumber); //
+                    _am_invalidateScheduleCacheForBlock(teamSheet.getName(), year, weekNumber);
                 }
             } // End loop weeklyPayloads
             return anyModificationInAnyWeek; // Return if any sheet writes actually happened
         }, "Batch Update Multiple Weeks Availability", teamDataObject.availabilitySheetName);
 
-
         if (!batchUpdateResult && overallCellsModifiedCount > 0) {
-            // This means withProtectionBypass failed, or the inner logic returned false when it shouldn't have.
-            // If overallCellsModifiedCount > 0, it means we *intended* to write but batchUpdateResult is false.
             Logger.log(`${CONTEXT}: Overall batch update failed or reported no changes despite modifications tallied. Review protection bypass logs.`);
-            // Don't return error yet, let it try to build a response if some cells were tallied as modified.
-            // This path might be tricky to hit if withProtectionBypass throws on failure.
         }
 
         if (overallCellsModifiedCount > 0) {
-            if (BLOCK_CONFIG.SETTINGS.APPLY_SHEET_COLOR_CODING === true) { //
-                applyAvailabilityColors(teamSheet, overallModifiedSheetCellReferences); //
+            if (BLOCK_CONFIG.SETTINGS.APPLY_SHEET_COLOR_CODING === true) {
+                applyAvailabilityColors(teamSheet, overallModifiedSheetCellReferences);
             }
-            updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL); //
+            updateTeam(teamId, { lastActive: getCurrentTimestamp() }, BLOCK_CONFIG.ADMIN.SYSTEM_EMAIL);
+            
+            // Update the team's last updated timestamp
+            _tdm_touchTeamTimestamp(teamId);
+            
+            // === FIXED: No need to recreate cellChanges - already populated above ===
+            if (cellChanges.length > 0) {
+                _cache_trackCellChanges(teamId, teamSheet.getName(), cellChanges);
+            }
+            _cache_setTeamMetadata(teamId, BLOCK_CONFIG.CHANGE_TYPES.AVAILABILITY, userEmail, {
+                cellsModified: overallCellsModifiedCount,
+                action: action
+            });
         }
 
-        return createSuccessResponse({ //
+        return createSuccessResponse({
             cellsModified: overallCellsModifiedCount,
             invalidCells: overallInvalidCellsCount,
             userInitials: userInitials,
             action: action
-        }, generateUpdateMessage(action, overallCellsModifiedCount, overallInvalidCellsCount, userInitials)); //
+        }, generateUpdateMessage(action, overallCellsModifiedCount, overallInvalidCellsCount, userInitials));
 
     } catch (e) {
-        return handleError(e, CONTEXT); //
+        return handleError(e, CONTEXT);
     }
 }
 
@@ -324,110 +388,92 @@ function updateAvailabilityCell(sheet, row, col, initials, action) {
   }
 }
 
-function removePlayerInitialsFromSchedule(availabilitySheetName, playerInitialsToRemove, clearCurrentAndFuture) {
-  const CONTEXT = "AvailabilityManager.removePlayerInitialsFromSchedule";
+/**
+ * FINAL, FULLY OPTIMIZED REPLACEMENT for removePlayerInitialsFromSchedule
+ * This version reads the list of weeks to check from the fast WEEK_BLOCK_INDEX
+ * instead of performing a slow sheet scan.
+ */
+function removePlayerInitialsFromSchedule(availabilitySheetName, playerInitialsToRemove, clearCurrentAndFuture = true) {
+  const CONTEXT = "AvailabilityManager.removePlayerInitialsFromSchedule (v_FullyIndexed)";
   try {
+    Logger.log(`--- DEBUG: Entered ${CONTEXT} to remove initials: '${playerInitialsToRemove}' from sheet: '${availabilitySheetName}'`);
     if (!availabilitySheetName || !playerInitialsToRemove) {
-      return createErrorResponse("Sheet name and player initials are required."); 
+      return createErrorResponse("Sheet name and player initials are required.");
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(availabilitySheetName);
-    if (!sheet) {
-      return createErrorResponse(`Availability sheet "${availabilitySheetName}" not found.`); 
+    if (!sheet) return createErrorResponse(`Availability sheet "${availabilitySheetName}" not found.`);
+
+    // --- THIS IS THE NEW, FAST LOGIC ---
+    // Get the list of all week blocks FOR THIS TEAM directly from our fast index sheet.
+    // This replaces the slow findAllWeekBlocks(sheet) call.
+    const allBlocksMetadata = _getWeekBlocksForTeamFromIndex(sheet.getName()); 
+    if (!allBlocksMetadata || allBlocksMetadata.length === 0) {
+      return createSuccessResponse({}, "No week blocks found in index for this team. Nothing to clear.");
     }
+    // --- END OF NEW LOGIC ---
 
     const ucInitialsToRemove = playerInitialsToRemove.toUpperCase();
-    // Assumes findAllWeekBlocks is global from WeekBlockManager.js
-    const allBlocks = findAllWeekBlocks(sheet);
-    if (!allBlocks || allBlocks.length === 0) {
-      return createSuccessResponse({}, "No week blocks found on the sheet. Nothing to clear.");
-    }
-
     let currentYear, currentWeekNum;
     if (clearCurrentAndFuture) {
-      // Assumes getCurrentCETDate, getISOWeekNumber are global from Configuration.js
-      const now = getCurrentCETDate(); 
+      const now = getCurrentCETDate();
       currentYear = now.getFullYear();
-      currentWeekNum = getISOWeekNumber(now); 
+      currentWeekNum = getISOWeekNumber(now);
     }
 
-    let totalCellsCleared = 0;
-    const modifiedCellReferences = []; 
+    const cellsToUpdate = [];
 
-    // Assumes withProtectionBypass is global from CellProtection.js
-    const clearResult = withProtectionBypass(() => {
-      for (const block of allBlocks) {
-        if (clearCurrentAndFuture) {
-          const blockIsCurrentOrFuture = (block.year > currentYear) ||
-                                       (block.year === currentYear && block.weekNumber >= currentWeekNum);
-          if (!blockIsCurrentOrFuture) {
-            continue;
-          }
-        }
-        // BLOCK_CONFIG is global
-        const startDataRow = block.startRow;
-        const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length; 
-        const startDataCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1; 
+    for (const blockMeta of allBlocksMetadata) {
+      if (clearCurrentAndFuture) {
+        const isPastBlock = (blockMeta.year < currentYear) || (blockMeta.year === currentYear && blockMeta.weekNumber < currentWeekNum);
+        if (isPastBlock) continue;
+      }
+      
+      const startDataRow = blockMeta.startRow;
+      const numTimeSlots = BLOCK_CONFIG.TIME.STANDARD_TIME_SLOTS.length;
+      const startDataCol = BLOCK_CONFIG.LAYOUT.DAYS_START_COLUMN + 1;
+      const availabilityRange = sheet.getRange(startDataRow, startDataCol, numTimeSlots, 7);
+      const values = availabilityRange.getDisplayValues();
 
-        for (let rOffset = 0; rOffset < numTimeSlots; rOffset++) {
-          const currentRowInSheet = startDataRow + rOffset;
-          for (let cOffset = 0; cOffset < 7; cOffset++) {
-            const currentColInSheet = startDataCol + cOffset;
-            const cell = sheet.getRange(currentRowInSheet, currentColInSheet);
-            const currentValue = cell.getValue();
-            const currentText = String(currentValue || "").trim();
-
-            if (currentText) {
-              const initialsArray = currentText.toUpperCase().split(/[,\s]+/).filter(e => e.trim());
-              const initialIndex = initialsArray.indexOf(ucInitialsToRemove);
-
-              if (initialIndex > -1) {
-                initialsArray.splice(initialIndex, 1);
-                const newValue = initialsArray.join(", ");
-                cell.setValue(newValue);
-                totalCellsCleared++;
-                modifiedCellReferences.push({row: currentRowInSheet, col: currentColInSheet});
-              }
+      for (let r = 0; r < values.length; r++) {
+        for (let c = 0; c < values[r].length; c++) {
+          const cellValue = String(values[r][c] || "").trim();
+          if (cellValue && cellValue.toUpperCase().includes(ucInitialsToRemove)) {
+            const currentInitials = cellValue.toUpperCase().split(/[,\s]+/).filter(Boolean);
+            if (currentInitials.includes(ucInitialsToRemove)) {
+              const newInitials = currentInitials.filter(i => i !== ucInitialsToRemove);
+              cellsToUpdate.push({
+                rangeA1: sheet.getRange(startDataRow + r, startDataCol + c).getA1Notation(),
+                newValue: newInitials.join(", ")
+              });
             }
           }
         }
       }
-      return true;
-    }, "Remove Player Initials Batch", availabilitySheetName);
-
-    if (!clearResult) {
-        return createErrorResponse("Failed to clear initials due to protection bypass or sheet operation error."); 
     }
 
-    if (totalCellsCleared > 0) {
-      // Assumes applyAvailabilityColors is local/global
-      applyAvailabilityColors(sheet, modifiedCellReferences);
-      
-      const allBlocksOnSheetForCache = findAllWeekBlocks(sheet); // Re-fetch for cache invalidation
-      const invalidatedBlockKeys = new Set();
-
-      for (const cellRef of modifiedCellReferences) {
-        for (const block of allBlocksOnSheetForCache) { 
-          if (cellRef.row >= block.startRow && cellRef.row <= block.endRow) {
-             _am_invalidateScheduleCacheForBlock(sheet.getName(), block.year, block.weekNumber);
-            invalidatedBlockKeys.add(`${sheet.getName()}_${block.year}_W${block.weekNumber}`);
-            break; 
-          }
-        }
-      }
-      if (invalidatedBlockKeys.size > 0) {
-        Logger.log(`${CONTEXT}: Invalidated schedule cache for blocks: ${Array.from(invalidatedBlockKeys).join(', ')}`);
-      }
+    if (cellsToUpdate.length > 0) {
+      withProtectionBypass(() => {
+        const rangeA1s = cellsToUpdate.map(update => update.rangeA1);
+        const rangeList = sheet.getRangeList(rangeA1s).getRanges();
+        rangeList.forEach((range, index) => {
+          range.setValue(cellsToUpdate[index].newValue);
+        });
+      }, "Smart Batch Remove Initials", availabilitySheetName);
     }
-    // Assumes createSuccessResponse is global
-    return createSuccessResponse({ cellsCleared: totalCellsCleared },
-      `Cleared initials "${ucInitialsToRemove}" from ${totalCellsCleared} time slots.`);
-
+    
+    return createSuccessResponse({ cellsCleared: cellsToUpdate.length }, `Cleared initials "${ucInitialsToRemove}" from ${cellsToUpdate.length} time slots.`);
   } catch (e) {
-    return handleError(e, CONTEXT); // Assumes global
+    return handleError(e, CONTEXT);
   }
 }
+
+
+// You will also need to ADD this small helper function to WeekBlockManager.js
+// This is the function that reads the index.
+
+// Function moved to WeekBlockManager.js
 
 // Renamed function
 function am_getTeamSchedule(userEmail, teamId, year = null, weekNumber = null) {
@@ -653,8 +699,12 @@ function getTeamScheduleRange(userEmail, teamId, startYear, startWeek, endYear =
 
 function isValidAvailabilityCell(sheet, row, col) {
   try {
-    // Assumes findAllWeekBlocks is global from WeekBlockManager.js
-    const allBlocks = findAllWeekBlocks(sheet);
+    // Try index first, fall back to scan if needed
+    let allBlocks = _getWeekBlocksForTeamFromIndex(sheet.getName());
+    if (allBlocks.length === 0) {
+      Logger.log(`${CONTEXT}: No blocks in index, falling back to scan`);
+      allBlocks = _scanSheetForAllWeekBlocks(sheet);
+    }
     if (!allBlocks || allBlocks.length === 0) return false; 
 
     for (const block of allBlocks) {
@@ -760,8 +810,12 @@ function syncTeamAvailabilityData(teamId) {
 
     // Assumes withProtectionBypass is global
     const syncOpResult = withProtectionBypass(() => {
-      // Assumes findAllWeekBlocks is global from WeekBlockManager.js
-      const allBlocks = findAllWeekBlocks(teamSheet);
+      // Try index first, fall back to scan if needed
+      let allBlocks = _getWeekBlocksForTeamFromIndex(teamSheet.getName());
+      if (allBlocks.length === 0) {
+        Logger.log(`${CONTEXT}: No blocks in index, falling back to scan`);
+        allBlocks = _scanSheetForAllWeekBlocks(teamSheet);
+      }
       for (const block of allBlocks) {
         // BLOCK_CONFIG is global
         const startDataRow = block.startRow;
@@ -800,7 +854,12 @@ function syncTeamAvailabilityData(teamId) {
     
     if (cellsCleaned > 0) {
       applyAvailabilityColors(teamSheet, modifiedCellReferences); // Assumes local/global
-      const allBlocksOnSheetForCache = findAllWeekBlocks(teamSheet); // Assumes global
+      // Try index first, fall back to scan if needed
+      let allBlocksOnSheetForCache = _getWeekBlocksForTeamFromIndex(teamSheet.getName());
+      if (allBlocksOnSheetForCache.length === 0) {
+        Logger.log(`${CONTEXT}: No blocks in index, falling back to scan`);
+        allBlocksOnSheetForCache = _scanSheetForAllWeekBlocks(teamSheet);
+      }
       const invalidatedBlockKeys = new Set();
       for (const cellRef of modifiedCellReferences) {
         for (const block of allBlocksOnSheetForCache) {
@@ -842,8 +901,12 @@ function initializeTeamAvailabilityGrid(teamId) {
     
     // Assumes withProtectionBypass is global
     withProtectionBypass(() => {
-      // Assumes findAllWeekBlocks is global from WeekBlockManager.js
-      const allBlocks = findAllWeekBlocks(teamSheet);
+      // Try index first, fall back to scan if needed
+      let allBlocks = _getWeekBlocksForTeamFromIndex(teamSheet.getName());
+      if (allBlocks.length === 0) {
+        Logger.log(`${CONTEXT}: No blocks in index, falling back to scan`);
+        allBlocks = _scanSheetForAllWeekBlocks(teamSheet);
+      }
       const invalidatedBlockKeys = new Set(); 
 
       for (const block of allBlocks) {
@@ -891,4 +954,166 @@ function _am_invalidateScheduleCacheForBlock(sheetName, year, weekNumber) {
     } catch (e) {
         Logger.log(`Error in ${CONTEXT} for ${sheetName} ${year}-W${weekNumber}: ${e.message}`);
     }
+}
+
+// =============================================================================
+// DELTA SYNC CACHE FUNCTIONS
+// =============================================================================
+
+/**
+ * Gets or creates team metadata for delta tracking (SMART UPSERT)
+ * This function updates lastActive, increments version, and tracks change types
+ * @param {string} teamId - The team ID
+ * @param {string} changeType - Type of change (from BLOCK_CONFIG.CHANGE_TYPES)
+ * @param {string} updatedBy - Email of user making the change
+ * @param {Object} changeDetails - Optional details about the change
+ * @return {Object} Team metadata object
+ */
+function _cache_setTeamMetadata(teamId, changeType, updatedBy, changeDetails = {}) {
+  const CONTEXT = "AvailabilityManager._cache_setTeamMetadata";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) {
+      Logger.log(`${CONTEXT}: Cache service not available`);
+      return null;
+    }
+    
+    const metadataKey = `teamMetadata_${teamId}`;
+    
+    // Get existing metadata or create new
+    let metadata = null;
+    const cachedData = cache.get(metadataKey);
+    if (cachedData) {
+      try {
+        metadata = JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse cached metadata, creating new`);
+      }
+    }
+    
+    if (!metadata) {
+      metadata = {
+        teamId: teamId,
+        version: 0,
+        lastActive: 0,
+        lastUpdateType: BLOCK_CONFIG.CHANGE_TYPES.UNKNOWN,
+        lastUpdatedBy: null,
+        changeDetails: {},
+        created: new Date().getTime()
+      };
+    }
+    
+    // Update metadata
+    const now = new Date().getTime();
+    metadata.version = (metadata.version || 0) + 1;
+    metadata.lastActive = now;
+    metadata.lastUpdateType = changeType;
+    metadata.lastUpdatedBy = updatedBy;
+    metadata.changeDetails = changeDetails;
+    metadata.updated = now;
+    
+    // Cache with default duration
+    cache.put(metadataKey, JSON.stringify(metadata), BLOCK_CONFIG.CACHE.DEFAULT_DURATION_SECONDS);
+    
+    Logger.log(`${CONTEXT}: Updated metadata for team ${teamId}, version ${metadata.version}, type: ${changeType}`);
+    return metadata;
+    
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error updating team metadata: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Gets team metadata for delta tracking (SIMPLE GETTER)
+ * @param {string} teamId - The team ID
+ * @return {Object|null} Team metadata object or null if not found
+ */
+function _cache_getTeamMetadata(teamId) {
+  const CONTEXT = "AvailabilityManager._cache_getTeamMetadata";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return null;
+    
+    const metadataKey = `teamMetadata_${teamId}`;
+    const cachedData = cache.get(metadataKey);
+    
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse metadata for team ${teamId}`);
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error getting team metadata: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Tracks cell changes for delta sync (CALLED FROM UPDATE FUNCTIONS)
+ * This stores detailed cell change information with short expiration
+ * @param {string} teamId - The team ID
+ * @param {string} sheetName - The sheet name
+ * @param {Array} cellChanges - Array of change objects
+ */
+function _cache_trackCellChanges(teamId, sheetName, cellChanges) {
+  const CONTEXT = "AvailabilityManager._cache_trackCellChanges";
+  try {
+    if (!cellChanges || cellChanges.length === 0) return;
+    
+    const cache = CacheService.getScriptCache();
+    if (!cache) return;
+    
+    const changesKey = `cellChanges_${teamId}_${sheetName}`;
+    const changesData = {
+      teamId: teamId,
+      sheetName: sheetName,
+      changes: cellChanges,
+      timestamp: new Date().getTime(),
+      cellsModified: cellChanges.length
+    };
+    
+    // Store with short expiration (5 minutes)
+    cache.put(changesKey, JSON.stringify(changesData), BLOCK_CONFIG.CACHE.CELL_CHANGES_DURATION);
+    
+    Logger.log(`${CONTEXT}: Tracked ${cellChanges.length} cell changes for ${teamId}`);
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error tracking cell changes: ${e.message}`);
+  }
+}
+
+/**
+ * Gets cell changes for delta sync (SIMPLE WRAPPER)
+ * @param {string} teamId - The team ID  
+ * @param {string} sheetName - The sheet name
+ * @return {Object|null} Cell changes data or null if not found
+ */
+function _cache_getCellChanges(teamId, sheetName) {
+  const CONTEXT = "AvailabilityManager._cache_getCellChanges";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (!cache) return null;
+    
+    const changesKey = `cellChanges_${teamId}_${sheetName}`;
+    const cachedData = cache.get(changesKey);
+    
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        Logger.log(`${CONTEXT}: Failed to parse cell changes`);
+        return null;
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log(`${CONTEXT}: Error getting cell changes: ${e.message}`);
+    return null;
+  }
 }

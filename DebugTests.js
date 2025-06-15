@@ -562,7 +562,7 @@ function testScenario_ScheduledWeekProvisioning() {
     _scenarioLog("Step 3: Verifying Team C's availability sheet.");
     const teamCSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(teamC_sheetName);
     if (assert(teamCSheet, `Sheet ${teamC_sheetName} exists.`)) {
-        const blocks = findAllWeekBlocks(teamCSheet);
+        const blocks = _scanSheetForAllWeekBlocks(teamCSheet);
         const expectedMinBlockCount = BLOCK_CONFIG.TEAM_SETTINGS.MAX_WEEKS_PER_TEAM || 4;
         assert(blocks.length >= expectedMinBlockCount, `Team C has at least ${expectedMinBlockCount} blocks (Found: ${blocks.length}).`);
         if (blocks.length > 0) { /* ... more detailed block checks ... */ }
@@ -824,4 +824,88 @@ function testScenario_FixedInitials() {
   }
 
   logTestSummary(SCENARIO_NAME);
+}
+
+// Debug function to test data flow
+function debugTestUserContext() {
+  const CONTEXT = "DEBUG.testUserContext";
+  
+  try {
+    // Test 1: Check if getUserContext works
+    console.log("=== TEST 1: Getting User Context ===");
+    const context = getUserContext();
+    console.log("User authenticated:", context.isAuthenticated);
+    console.log("User email:", context.userEmail);
+    console.log("Number of teams:", context.teams ? context.teams.length : 0);
+    
+    // Test 2: Check if schedule data is included
+    console.log("\n=== TEST 2: Schedule Data ===");
+    if (context.schedule) {
+      console.log("Schedule exists:", !!context.schedule);
+      console.log("Schedule success:", context.schedule.success);
+      console.log("Number of weeks:", context.schedule.weeks ? context.schedule.weeks.length : 0);
+      
+      if (context.schedule.weeks && context.schedule.weeks.length > 0) {
+        console.log("\nWeek details:");
+        context.schedule.weeks.forEach((week, index) => {
+          console.log(`Week ${index + 1}: ${week.year}-W${week.weekNumber}`);
+        });
+      }
+    } else {
+      console.log("NO SCHEDULE DATA FOUND!");
+    }
+    
+    // Test 3: Check the template rendering
+    console.log("\n=== TEST 3: Template Data ===");
+    const template = HtmlService.createTemplateFromFile('index');
+    template.userContextFromServer = context;
+    template.BLOCK_CONFIG = BLOCK_CONFIG;
+    template.ROLES = ROLES;
+    
+    // Check if the template can access the data
+    const templateOutput = template.evaluate().getContent();
+    const hasUserContext = templateOutput.includes('window.userContextFromServer');
+    const hasScheduleData = templateOutput.includes('"weeks":[');
+    
+    console.log("Template includes userContext:", hasUserContext);
+    console.log("Template includes schedule data:", hasScheduleData);
+    
+    // Test 4: Return summary
+    return {
+      userAuthenticated: context.isAuthenticated,
+      userEmail: context.userEmail,
+      teamsCount: context.teams ? context.teams.length : 0,
+      scheduleExists: !!context.schedule,
+      weeksCount: context.schedule && context.schedule.weeks ? context.schedule.weeks.length : 0,
+      templateRendersData: hasUserContext && hasScheduleData
+    };
+    
+  } catch (e) {
+    console.error(`Error in ${CONTEXT}:`, e.message);
+    console.error("Stack trace:", e.stack);
+    return {
+      error: e.message,
+      stack: e.stack
+    };
+  }
+}
+
+// Also add this simpler test
+function debugCheckScheduleInContext() {
+  const context = getUserContext();
+  
+  console.log("=== SCHEDULE CHECK ===");
+  console.log("1. Context has schedule?", !!context.schedule);
+  console.log("2. Schedule has weeks?", !!(context.schedule && context.schedule.weeks));
+  console.log("3. Number of weeks:", context.schedule && context.schedule.weeks ? context.schedule.weeks.length : 0);
+  
+  if (context.schedule && context.schedule.weeks && context.schedule.weeks.length > 0) {
+    console.log("4. First week data:");
+    const firstWeek = context.schedule.weeks[0];
+    console.log("   - Year:", firstWeek.year);
+    console.log("   - Week:", firstWeek.weekNumber);
+    console.log("   - Has availability?", !!firstWeek.availability);
+  }
+  
+  return context.schedule ? "Schedule found!" : "No schedule!";
 }

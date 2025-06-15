@@ -59,6 +59,22 @@
     // Declarations for tracking the year/week of the displayed grids
     let currentGrid1Year, currentGrid1Week, currentGrid2Year, currentGrid2Week;
     
+    // Delta Sync State Management
+    let teamTimestamps = new Map(); // Tracks last update time per team
+    let pollInterval = null; // Reference to the polling timeout for stopping it
+    let pollBackoff = 30000; // Current polling interval in ms (starts at 30s)
+    const MIN_POLL_INTERVAL = 30000; // Minimum 30 seconds between polls
+    const MAX_POLL_INTERVAL = 300000; // Maximum 5 minutes (for error backoff)
+    let isPollingActive = false; // A flag to control the polling loop
+
+    // Cache warming state
+    let favoritesWarmed = false; // Flag to ensure we only warm the cache once per session
+    let warmingInProgress = false; // Flag to prevent multiple simultaneous warming attempts
+
+    // Change notification system
+    let pendingNotifications = []; // A queue for notifications to prevent spam
+    let notificationTimeout = null; // Reference to the notification display timeout
+    
     // Track key states
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Shift') isShiftPressed = true;
