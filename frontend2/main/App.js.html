@@ -279,6 +279,22 @@ function requestTeamSwitch(teamId) {
         
         // Start polling for changes
         _pollIntervalId = setInterval(_pollForServerChanges, POLL_INTERVAL_MS);
+
+        // NEW: Dynamically fetch BLOCK_CONFIG from server and set it to window.BLOCK_CONFIG_CLIENT
+        // This ensures the client-side config is fully available after initialization.
+        google.script.run
+            .withSuccessHandler(function(response) {
+                if (response.success && response.config) {
+                    window.BLOCK_CONFIG_CLIENT = response.config;
+                    console.log("App: BLOCK_CONFIG_CLIENT loaded dynamically.", window.BLOCK_CONFIG_CLIENT);
+                } else {
+                    console.error("App: Failed to load BLOCK_CONFIG_CLIENT dynamically.", response);
+                }
+            })
+            .withFailureHandler(function(error) {
+                console.error("App: Error fetching BLOCK_CONFIG_CLIENT:", error);
+            })
+            .getSystemConfigForClient(); // New backend function to fetch config
     }
     
     /**
@@ -367,13 +383,17 @@ function refreshCurrentTeam() {
 // Find the 'return' statement at the VERY END of App.js.html
 // and add 'refreshCurrentTeam' to the list of public functions.
 
+// IMPORTANT: Ensure there is ONLY ONE return statement for the App module.
+// This block should be the final return statement, consolidating all public API functions.
 return {
     init: init,
+    requestTeamSwitch: requestTeamSwitch,
+    refreshUserContext: refreshUserContext,
     requestWeekChange: requestWeekChange,
     getActiveTeam: getActiveTeam,
-    refreshCurrentTeam: refreshCurrentTeam,
     getUserInitialsForTeam: getUserInitialsForTeam,
-    getWeekInfo: getWeekInfo, // <-- ADD THIS MISSING FUNCTION
+    getWeekInfo: getWeekInfo,
+    refreshCurrentTeam: refreshCurrentTeam, // Added this public function
     showMessage: showMessage,
     showSaveTemplateModal: showSaveTemplateModal,
     showLoadTemplateModal: showLoadTemplateModal
@@ -405,7 +425,8 @@ return {
         console.log("Show load template modal");
     }
 
-    // Return the public API (ONLY ONE RETURN STATEMENT)
+    // This is the correct and only return statement for the App module.
+    // All public functions should be listed here.
     return {
         init: init,
         requestTeamSwitch: requestTeamSwitch,
@@ -416,7 +437,8 @@ return {
         getWeekInfo: getWeekInfo,
         showMessage: showMessage,
         showSaveTemplateModal: showSaveTemplateModal,
-        showLoadTemplateModal: showLoadTemplateModal
+        showLoadTemplateModal: showLoadTemplateModal,
+        refreshCurrentTeam: refreshCurrentTeam // Ensure refreshCurrentTeam is exposed
     };
 
 })();

@@ -42,6 +42,7 @@ const AvailabilityGrid = (function() {
         document.head.appendChild(style);
     }
 
+    // UPDATED: _onGridClick to directly use event.shiftKey
     function _onGridClick(event) {
         const cell = event.target.closest('.availability-cell');
         if (cell) {
@@ -51,29 +52,27 @@ const AvailabilityGrid = (function() {
             const colIndex = parseInt(cell.dataset.colIndex, 10);
 
             if (!isNaN(rowIndex) && !isNaN(colIndex)) {
-                // Toggle cell and update visual state
-                const isSelected = GridSelectionService.toggleCell(rowIndex, colIndex, gridId);
-                _updateCellVisualState(cell, isSelected);
-                
-                // Update all cells visual state in case of rectangle selection
-                _refreshAllCellStates();
+                // Pass event.shiftKey directly to toggleCell.
+                // This is the most reliable way to check the Shift key state for a click event.
+                GridSelectionService.toggleCell(rowIndex, colIndex, gridId, event.shiftKey); 
             }
             return;
         }
 
-        // Check for time row click
+        // Check for time row click (selects entire row)
         const timeLabel = event.target.closest('.time-label');
         if (timeLabel && timeLabel.parentElement.dataset.rowIndex) {
             event.preventDefault();
             const gridId = event.currentTarget.id.replace('availability-grid-', '');
             const rowIndex = parseInt(timeLabel.parentElement.dataset.rowIndex, 10);
             
-            GridSelectionService.selectTimeRow(rowIndex, gridId);
-            _refreshAllCellStates();
+            // Pass event.shiftKey directly to selectTimeRow.
+            GridSelectionService.selectTimeRow(rowIndex, gridId, event.shiftKey);
             return;
         }
     }
 
+    // UPDATED: _onHeaderClick to directly use event.shiftKey
     function _onHeaderClick(event) {
         const header = event.target.closest('.day-header-full');
         if (!header) return;
@@ -85,8 +84,8 @@ const AvailabilityGrid = (function() {
         const dayIndex = headers.indexOf(header);
         
         if (dayIndex >= 0) {
-            GridSelectionService.selectDayColumn(dayIndex, gridId);
-            _refreshAllCellStates();
+            // Pass event.shiftKey directly to selectDayColumn.
+            GridSelectionService.selectDayColumn(dayIndex, gridId, event.shiftKey);
         }
     }
 

@@ -610,3 +610,21 @@ function handleKickPlayerAndRegenerateCode(teamId, playerToKickEmail) {
 function getScheduleForTeam(teamId) {
     return api_getScheduleForTeam(teamId);
 }
+
+/**
+ * Returns the BLOCK_CONFIG object to the client.
+ * This is used for dynamic client-side configuration.
+ */
+function getSystemConfigForClient() {
+  const CONTEXT = "WebAppController.getSystemConfigForClient";
+  try {
+    // BLOCK_CONFIG is a global constant defined in Configuration.js
+    return createSuccessResponse({ config: BLOCK_CONFIG }); 
+  } catch (e) {
+    return handleError(e, CONTEXT);
+  }
+}
+
+function getScheduleForTeam(teamId) {
+    return api_getScheduleForTeam(teamId);
+}

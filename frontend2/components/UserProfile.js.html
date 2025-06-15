@@ -58,6 +58,11 @@ const UserProfile = (function() {
  * This version uses the ImageService "proxy" to fetch the helper image
  * from Google Drive instead of using a hardcoded base64 string.
  */
+/**
+ * REPLACEMENT for _onEditClick in UserProfile.js.html
+ * This version uses the ImageService "proxy" to fetch the helper image
+ * from Google Drive instead of using a hardcoded base64 string.
+ */
 function _onEditClick() {
     const modal = document.getElementById('profile-editor-modal');
     const form = document.getElementById('profile-editor-form');
@@ -75,19 +80,28 @@ function _onEditClick() {
         form.discordUsername.value = _userContext.discordUsername || '';
     }
     
-    // --- THIS IS THE NEW LOGIC ---
-    // Fetch the helper image using our ImageService proxy
+    // --- THIS IS THE NEW LOGIC (confirmed working core) ---
+    // Fetch the helper image using our ImageService proxy.
+    // window.BLOCK_CONFIG_CLIENT should now be reliably available.
     const imageUrl = window.BLOCK_CONFIG_CLIENT?.WEB_APP?.DISCORD_HELP_IMAGE_URL;
     if (imageUrl) {
         google.script.run
             .withSuccessHandler(function(response) {
                 if (response.success && response.imageBase64) {
                     helpImage.src = `data:${response.mimeType};base64,${response.imageBase64}`;
-                } else if (response.success && response.directUrl) {
+                } else if (response.success && response.directUrl) { // Fallback if backend returns a direct URL
                     helpImage.src = response.directUrl;
                 }
             })
+            .withFailureHandler(function(error) {
+                console.error("UserProfile: Backend call to getDriveImageAsBase64 failed:", error);
+                // Optionally set a fallback image or show an error to the user
+                helpImage.src = "https://via.placeholder.com/100x50?text=Error"; // Generic error placeholder
+            })
             .getDriveImageAsBase64(imageUrl);
+    } else {
+        console.error("UserProfile: DISCORD_HELP_IMAGE_URL not found in client config.");
+        helpImage.src = "https://via.placeholder.com/100x50?text=Config+Missing"; // Config error placeholder
     }
     // --- END OF NEW LOGIC ---
 

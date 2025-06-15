@@ -291,19 +291,21 @@ function findWeekBlock(sheet, yearToFind, weekNumberToFind) {
     // TIER 1: Check Script Cache
     const cache = CacheService.getScriptCache();
     const cacheKey = `${BLOCK_CONFIG.WEEK_BLOCK_INDEX.CACHE_PREFIX}${sheetName}_${yearToFind}_W${weekNumberToFind}`;
-    
+    Logger.log(`${CONTEXT}: Attempting to get cache for key: ${cacheKey}`); // <<< ADD THIS LOG
+
     const cachedLocation = cache.get(cacheKey);
     if (cachedLocation) {
       Logger.log(`${CONTEXT}: ✅ Cache HIT`);
       return JSON.parse(cachedLocation);
     }
     
+    Logger.log(`${CONTEXT}: ❌ Cache MISS for ${cacheKey}. Checking index sheet.`); // <<< ADD THIS LOG
     // TIER 2: Check Index Sheet
     Logger.log(`${CONTEXT}: Cache MISS, checking index sheet`);
     const indexResult = _findWeekInIndexSheet(sheetName, yearToFind, weekNumberToFind);
     
     if (indexResult) {
-      Logger.log(`${CONTEXT}: ✅ Found in index`);
+      Logger.log(`${CONTEXT}: ✅ Found in index, putting to cache for key: ${cacheKey}`); // <<< ADD THIS LOG
       // Cache for next time
       cache.put(cacheKey, JSON.stringify(indexResult), BLOCK_CONFIG.WEEK_BLOCK_INDEX.CACHE_TTL);
       return indexResult;

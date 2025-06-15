@@ -6,7 +6,6 @@
 </header>
 
 <main class="flex-grow w-full max-w-screen-2xl mx-auto flex flex-col p-2 sm:p-4 gap-4">
-
   <div class="flex flex-row gap-4 h-auto">
     <div id="grid-cell-top-left" class="w-72 flex-shrink-0 bg-slate-800/60 rounded-lg shadow border border-slate-700 p-3 flex justify-between items-center">
       <div class="flex items-center">
@@ -321,7 +320,6 @@
 
 <style>
 /* Team Panel Drawer Styles */
-/* Team Panel Drawer Styles */
 .team-panel {
   position: relative;
   overflow: hidden;
@@ -337,14 +335,21 @@
   border: 1px solid rgb(71, 85, 105);
   border-radius: 0.5rem;
   backdrop-filter: blur(8px);
-  transform: translateY(100%);
-  transition: transform 0.3s ease-in-out;
   z-index: 30;
   overflow-y: auto;
+  will-change: transform;
+}
+
+.drawer.closed {
+  transform: translateY(100%);
+  pointer-events: none;
+  transition: transform 0.3s ease-in-out;
 }
 
 .drawer.open {
   transform: translateY(0);
+  pointer-events: auto;
+  transition: transform 0.3s ease-in-out;
 }
 
 .toggle-section {
