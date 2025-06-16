@@ -20,21 +20,13 @@ const TeamInfo = (function() {
 
 function _toggleDrawer() {
   if (_isDrawerOpen) {
-    // Opening the drawer
-    _drawer.classList.remove('closed');
-    _drawer.classList.add('open');
-    _arrow.style.transform = 'rotate(180deg)';
-    
-    // Load content data after animation starts
-    setTimeout(() => {
-      _loadManagementData();
-    }, 50);
-    
+    // Open to top-14
+    _drawer.classList.remove('translate-y-[calc(100%-40px)]');
+    _drawer.classList.add('translate-y-0');
   } else {
-    // Closing the drawer
-    _drawer.classList.remove('open');
-    _drawer.classList.add('closed');
-    _arrow.style.transform = 'rotate(0deg)';
+    // Close to bottom+40px
+    _drawer.classList.remove('translate-y-0');
+    _drawer.classList.add('translate-y-[calc(100%-40px)]');
   }
 }
 
